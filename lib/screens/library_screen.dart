@@ -1,10 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../models/renpy_game.dart';
 import '../services/game_scanner.dart';
 import '../services/renpy_bridge.dart';
+import '../widgets/folder_picker_dialog.dart';
 import '../widgets/game_card.dart';
 import 'game_runner_screen.dart';
 import 'settings_screen.dart';
@@ -39,16 +37,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Future<void> _loadGames() async {
     setState(() => _isLoading = true);
-    final prefs = await SharedPreferences.getInstance();
-    final List<String>? gamesJson = prefs.getStringList('saved_renpy_games');
+    final saved = await RenpyBridge.loadSavedGames();
 
     _games.clear();
-    if (gamesJson != null && gamesJson.isNotEmpty) {
-      for (final str in gamesJson) {
-        try {
-          _games.add(RenpyGame.fromJson(str));
-        } catch (_) {}
-      }
+    if (saved != null && saved.isNotEmpty) {
+      _games.addAll(saved);
     } else {
       // Add default demo game for immediate testing if empty
       _games.add(GameScanner.createDemoGame());
@@ -59,9 +52,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _saveGames() async {
-    final prefs = await SharedPreferences.getInstance();
-    final List<String> gamesJson = _games.map((g) => g.toJson()).toList();
-    await prefs.setStringList('saved_renpy_games', gamesJson);
+    await RenpyBridge.saveGames(_games);
   }
 
   void _addGame(RenpyGame game) {
@@ -95,35 +86,24 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _pickGameFolder() async {
-    try {
-      // Pick either folder or executable file
-      final String? selectedDirectory =
-          await FilePicker.platform.getDirectoryPath();
+    final String? selectedDirectory = await showDialog<String>(
+      context: context,
+      builder: (_) => const FolderPickerDialog(pickExecutableFile: false),
+    );
 
-      if (selectedDirectory != null) {
-        _processSelectedPath(selectedDirectory);
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('เกิดข้อผิดพลาดในการเลือกโฟลเดอร์: $e')),
-      );
+    if (selectedDirectory != null) {
+      _processSelectedPath(selectedDirectory);
     }
   }
 
   Future<void> _pickGameFile() async {
-    try {
-      final FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['exe', 'py', 'sh', 'rpy'],
-      );
+    final String? selectedFile = await showDialog<String>(
+      context: context,
+      builder: (_) => const FolderPickerDialog(pickExecutableFile: true),
+    );
 
-      if (result != null && result.files.single.path != null) {
-        _processSelectedPath(result.files.single.path!);
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('เกิดข้อผิดพลาดในการเลือกไฟล์: $e')),
-      );
+    if (selectedFile != null) {
+      _processSelectedPath(selectedFile);
     }
   }
 
@@ -429,7 +409,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.folder_open_rounded, size: 72, color: Colors.grey.shade600),
+            Icon(Icons.folder_open_rounded,
+                size: 72, color: Colors.grey.shade600),
             const SizedBox(height: 16),
             Text(
               'ยังไม่มีเกมในคลังของคุณ',
@@ -478,7 +459,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 ),
                 const Divider(),
                 ListTile(
-                  leading: const Icon(Icons.folder_rounded, color: Colors.amber),
+                  leading:
+                      const Icon(Icons.folder_rounded, color: Colors.amber),
                   title: const Text('เลือกโฟลเดอร์เกม (Folder)'),
                   subtitle: const Text('เลือกโฟลเดอร์ที่มี game/ และ .rpyc'),
                   onTap: () {
@@ -497,7 +479,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   },
                 ),
                 ListTile(
-                  leading: const Icon(Icons.gamepad_rounded, color: Colors.green),
+                  leading:
+                      const Icon(Icons.gamepad_rounded, color: Colors.green),
                   title: const Text('เพิ่มเกมตัวอย่าง (Demo Game)'),
                   subtitle: const Text('ทดสอบระบบคลังและปุ่มควบคุมเสมือน'),
                   onTap: () {

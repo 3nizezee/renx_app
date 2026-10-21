@@ -1,5 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:path/path.dart' as p;
+import '../models/renpy_game.dart';
 
 class RenpyBridge {
   static const MethodChannel _channel =
@@ -54,10 +57,57 @@ class RenpyBridge {
 
   /// Open link to download the Ren'Py plugin if not installed
   static Future<void> openPluginDownloadPage() async {
-    final uri = Uri.parse(
-        'https://joiplay.cyou/'); // Or itch.io / Google Play link
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    try {
+      await _channel.invokeMethod('openUrl', {
+        'url': 'https://joiplay.cyou/',
+      });
+    } catch (_) {}
+  }
+
+  /// Get app internal files directory path
+  static Future<String> getAppDataPath() async {
+    try {
+      final String? path = await _channel.invokeMethod('getAppDataPath');
+      return path ?? Directory.systemTemp.path;
+    } catch (_) {
+      return Directory.systemTemp.path;
     }
+  }
+
+  /// Get Android external storage root path (e.g. /storage/emulated/0)
+  static Future<String> getExternalStoragePath() async {
+    try {
+      final String? path =
+          await _channel.invokeMethod('getExternalStoragePath');
+      return path ?? '/storage/emulated/0';
+    } catch (_) {
+      return '/storage/emulated/0';
+    }
+  }
+
+  /// Load saved games from local JSON file
+  static Future<List<RenpyGame>?> loadSavedGames() async {
+    try {
+      final dirPath = await getAppDataPath();
+      final file = File(p.join(dirPath, 'saved_renpy_games.json'));
+      if (!await file.exists()) return null;
+      final content = await file.readAsString();
+      final List<dynamic> decoded = json.decode(content);
+      return decoded
+          .map((item) => RenpyGame.fromMap(Map<String, dynamic>.from(item)))
+          .toList();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Save games list to local JSON file
+  static Future<void> saveGames(List<RenpyGame> games) async {
+    try {
+      final dirPath = await getAppDataPath();
+      final file = File(p.join(dirPath, 'saved_renpy_games.json'));
+      final encoded = json.encode(games.map((g) => g.toMap()).toList());
+      await file.writeAsString(encoded);
+    } catch (_) {}
   }
 }

@@ -1,7 +1,6 @@
 package com.example.ax_app
 
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -56,6 +55,23 @@ class MainActivity: FlutterActivity() {
                     val executable = call.argument<String>("executable") ?: ""
                     val success = launchGameWithPlugin(gamePath, executable)
                     result.success(success)
+                }
+                "openUrl" -> {
+                    val url = call.argument<String>("url") ?: "https://joiplay.cyou/"
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
+                "getAppDataPath" -> {
+                    result.success(filesDir.absolutePath)
+                }
+                "getExternalStoragePath" -> {
+                    result.success(Environment.getExternalStorageDirectory().absolutePath)
                 }
                 else -> result.notImplemented()
             }
