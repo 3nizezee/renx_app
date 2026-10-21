@@ -27,13 +27,10 @@ class RenPlayApp extends StatelessWidget {
         useMaterial3: true,
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF121217),
-        cardTheme: const CardTheme(
-          color: Color(0xFF1E1E26),
-        ),
+        cardColor: const Color(0xFF1E1E26),
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF7C4DFF),
           brightness: Brightness.dark,
-          background: const Color(0xFF121217),
           surface: const Color(0xFF1E1E26),
         ),
         appBarTheme: const AppBarTheme(

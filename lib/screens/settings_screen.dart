@@ -170,7 +170,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 // Guide Card
                 Card(
                   elevation: 1,
-                  color: theme.colorScheme.surfaceVariant.withOpacity(0.4),
+                  color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.4),
                   child: Padding(
                     padding: const EdgeInsets.all(16.0),
                     child: Column(

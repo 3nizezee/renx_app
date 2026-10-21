@@ -40,6 +40,20 @@ jobs:
       - name: Get Dependencies
         run: flutter pub get
 
+      - name: Sync Android Gradle Config with Flutter SDK
+        run: |
+          mkdir -p /tmp/custom_android/kotlin
+          mkdir -p /tmp/custom_android/res
+          cp android/app/src/main/AndroidManifest.xml /tmp/custom_android/AndroidManifest.xml
+          cp android/app/src/main/kotlin/com/example/ax_app/MainActivity.kt /tmp/custom_android/kotlin/MainActivity.kt
+          cp -r android/app/src/main/res/* /tmp/custom_android/res/
+          rm -rf android
+          flutter create --platforms=android --org com.example --project-name ax_app .
+          mkdir -p android/app/src/main/kotlin/com/example/ax_app
+          cp /tmp/custom_android/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          cp /tmp/custom_android/kotlin/MainActivity.kt android/app/src/main/kotlin/com/example/ax_app/MainActivity.kt
+          cp -r /tmp/custom_android/res/* android/app/src/main/res/
+
       - name: Build Release APK
         run: flutter build apk --release
 
