@@ -296,30 +296,32 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ),
       body: Column(
         children: [
-          // Plugin Warning Banner if not installed
-          if (!_isPluginInstalled)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              color: Colors.amber.shade900.withOpacity(0.25),
-              child: Row(
-                children: [
-                  const Icon(Icons.info_outline,
-                      color: Colors.amber, size: 20),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'ตรวจไม่พบ Ren\'Py Plugin บนเครื่อง',
-                      style: TextStyle(fontSize: 12),
-                    ),
+          // Engine Status Banner (Built-in Engine Ready + External Plugin Option)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: Colors.green.shade900.withOpacity(0.22),
+            child: Row(
+              children: [
+                const Icon(Icons.bolt_rounded,
+                    color: Colors.greenAccent, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _isPluginInstalled
+                        ? 'เอนจินพร้อมใช้งาน (Built-in + External Plugin)'
+                        : 'Built-in RenPlay Engine พร้อมใช้งานทันที',
+                    style: const TextStyle(fontSize: 12),
                   ),
-                  TextButton(
-                    onPressed: () => RenpyBridge.openPluginDownloadPage(),
-                    child: const Text('ดาวน์โหลด'),
-                  ),
-                ],
-              ),
+                ),
+                TextButton.icon(
+                  onPressed: () =>
+                      RenpyBridge.showPluginDownloadDialog(context),
+                  icon: const Icon(Icons.extension_rounded, size: 16),
+                  label: const Text('จัดการปลั๊กอิน'),
+                ),
+              ],
             ),
+          ),
 
           // Search and Filter Bar
           Padding(

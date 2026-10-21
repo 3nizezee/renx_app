@@ -43,7 +43,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : ListView(
               padding: const EdgeInsets.all(16.0),
               children: [
-                // Engine Status Card
+                // Built-in Engine Status Card
                 Card(
                   elevation: 2,
                   child: Padding(
@@ -53,13 +53,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: [
                         Row(
                           children: [
-                            Icon(
-                              _isPluginInstalled
-                                  ? Icons.check_circle_rounded
-                                  : Icons.warning_amber_rounded,
-                              color: _isPluginInstalled
-                                  ? Colors.green
-                                  : Colors.orange,
+                            const Icon(
+                              Icons.check_circle_rounded,
+                              color: Colors.greenAccent,
                               size: 28,
                             ),
                             const SizedBox(width: 12),
@@ -68,20 +64,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'Ren\'Py Engine Plugin',
-                                    style: theme.textTheme.titleMedium?.copyWith(
+                                    'Built-in RenPlay Engine (ในตัวแอป)',
+                                    style:
+                                        theme.textTheme.titleMedium?.copyWith(
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
-                                  Text(
-                                    _isPluginInstalled
-                                        ? 'ติดตั้งแล้ว พร้อมรันเกม PC ได้เต็มประสิทธิภาพ'
-                                        : 'ยังไม่ได้ติดตั้ง Plugin สำหรับรัน Python/Ren\'Py',
+                                  const Text(
+                                    'พร้อมใช้งานทันที • รองรับไฟล์สคริปต์ .rpy / .rpyc, ฉากหลัง, ตัวละคร และ Save/Load',
                                     style: TextStyle(
-                                      color: _isPluginInstalled
-                                          ? Colors.green
-                                          : Colors.orange,
-                                      fontSize: 13,
+                                      color: Colors.greenAccent,
+                                      fontSize: 12,
                                     ),
                                   ),
                                 ],
@@ -89,15 +82,70 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ],
                         ),
-                        if (!_isPluginInstalled) ...[
-                          const SizedBox(height: 12),
-                          FilledButton.icon(
-                            onPressed: () =>
-                                RenpyBridge.openPluginDownloadPage(),
-                            icon: const Icon(Icons.download_rounded),
-                            label: const Text('ดาวน์โหลด Ren\'Py Plugin ฟรี'),
-                          ),
-                        ],
+                        const Divider(height: 24),
+                        Row(
+                          children: [
+                            Icon(
+                              _isPluginInstalled
+                                  ? Icons.extension_rounded
+                                  : Icons.extension_off_rounded,
+                              color: _isPluginInstalled
+                                  ? Colors.cyanAccent
+                                  : Colors.amber,
+                              size: 26,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'External JoiPlay Ren\'Py Plugin',
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  Text(
+                                    _isPluginInstalled
+                                        ? 'ตรวจพบปลั๊กอินเสริมบนเครื่องแล้ว'
+                                        : 'ปลั๊กอินเสริมภายนอก (ทางเลือกสำหรับเกม 3D/Python ขั้นสูง)',
+                                    style: TextStyle(
+                                      color: _isPluginInstalled
+                                          ? Colors.cyanAccent
+                                          : Colors.grey,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            FilledButton.icon(
+                              onPressed: () =>
+                                  RenpyBridge.showPluginDownloadDialog(context),
+                              icon: const Icon(Icons.download_rounded, size: 18),
+                              label: const Text('เปิดศูนย์ดาวน์โหลดปลั๊กอิน'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: () => RenpyBridge.openUrl(
+                                  RenpyBridge.officialPatreonUrl),
+                              icon: const Icon(Icons.public_rounded, size: 18),
+                              label: const Text('Patreon ทางการ'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: () => RenpyBridge.openUrl(
+                                  RenpyBridge.officialGithubUrl),
+                              icon: const Icon(Icons.code_rounded, size: 18),
+                              label: const Text('GitHub'),
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -130,7 +178,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 children: [
                                   Text(
                                     'สิทธิ์การเข้าถึงไฟล์ทั้งหมด (Storage)',
-                                    style: theme.textTheme.titleMedium?.copyWith(
+                                    style:
+                                        theme.textTheme.titleMedium?.copyWith(
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
@@ -170,7 +219,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 // Guide Card
                 Card(
                   elevation: 1,
-                  color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.4),
+                  color: theme.colorScheme.surfaceContainerHighest
+                      .withOpacity(0.4),
                   child: Padding(
                     padding: const EdgeInsets.all(16.0),
                     child: Column(
@@ -192,19 +242,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         const SizedBox(height: 12),
                         _stepRow(
                           '1',
-                          'คัดลอกโฟลเดอร์เกม Ren\'Py ของ PC (ที่มีโฟลเดอร์ game และไฟล์ .exe) ลงในมือถือ เช่น ในโฟลเดอร์ Downloads',
+                          'คัดลอกโฟลเดอร์เกม Ren\'Py ของ PC (ที่มีโฟลเดอร์ game และไฟล์ .exe) ลงในมือถือ เช่น ในโฟลเดอร์ Download',
                         ),
                         _stepRow(
                           '2',
-                          'ในแอปนี้ กดปุ่ม "+" ที่หน้าหลัก แล้วเลือกโฟลเดอร์เกม หรือเลือกไฟล์ .exe ของเกม',
+                          'ในแอปนี้ กดปุ่ม "+ เพิ่มเกม" ที่หน้าหลัก แล้วเลือกโฟลเดอร์เกม หรือเลือกไฟล์ .exe ของเกม',
                         ),
                         _stepRow(
                           '3',
-                          'ระบบจะตรวจสอบไฟล์ .rpyc และดึงหน้าปกพร้อมตั้งค่าให้อัตโนมัติ',
+                          'ระบบจะตรวจสอบไฟล์สคริปต์ .rpy / .rpyc และดึงหน้าปกพร้อมตั้งค่าให้อัตโนมัติ',
                         ),
                         _stepRow(
                           '4',
-                          'กดปุ่ม "เล่น" เพื่อเริ่มเกม พร้อมใช้ปุ่มสัมผัสเสมือน (ESC, SKIP, AUTO, BACK, HIDE) บนหน้าจอได้ทันที!',
+                          'กดปุ่ม "เล่น" เพื่อเริ่มเกมผ่าน Built-in Engine ได้ทันที พร้อมใช้ปุ่มสัมผัสเสมือน (ESC, SKIP, AUTO, BACK, HIDE, NEXT) บนหน้าจอ!',
                         ),
                       ],
                     ),
