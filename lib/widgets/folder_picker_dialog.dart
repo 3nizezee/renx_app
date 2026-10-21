@@ -16,8 +16,9 @@ class FolderPickerDialog extends StatefulWidget {
 }
 
 class _FolderPickerDialogState extends State<FolderPickerDialog> {
+  String _extRoot = '/storage/emulated/0';
   String _currentPath = '/storage/emulated/0/Download';
-  List<FileSystemEntity> _entries = [];
+  List<FileSystemEntity> _entries = <FileSystemEntity>[];
   String? _errorMessage;
   bool _isLoading = true;
 
@@ -29,11 +30,12 @@ class _FolderPickerDialogState extends State<FolderPickerDialog> {
 
   Future<void> _initPath() async {
     final extRoot = await RenpyBridge.getExternalStoragePath();
+    _extRoot = extRoot;
     final downloadDir = Directory(p.join(extRoot, 'Download'));
     if (await downloadDir.exists()) {
-      _loadDirectory(downloadDir.path);
+      await _loadDirectory(downloadDir.path);
     } else {
-      _loadDirectory(extRoot);
+      await _loadDirectory(extRoot);
     }
   }
 
@@ -47,20 +49,28 @@ class _FolderPickerDialogState extends State<FolderPickerDialog> {
       final dir = Directory(targetPath);
       if (!await dir.exists()) {
         setState(() {
-          _errorMessage = 'ไม่พบโฟลเดอร์: $targetPath';
+          _errorMessage = 'ไม่พบโฟลเดอร์ที่ระบุ: $targetPath';
           _isLoading = false;
         });
         return;
       }
 
-      final rawList = dir.listSync();
+      final rawList = dir.listSync(followLinks: false);
       final filtered = rawList.where((entity) {
         final name = p.basename(entity.path);
         if (name.startsWith('.')) return false;
         if (entity is Directory) return true;
-        if (widget.pickExecutableFile && entity is File) {
+        if (entity is File) {
           final ext = p.extension(name).toLowerCase();
-          return ext == '.exe' || ext == '.py' || ext == '.sh' || ext == '.rpy';
+          if (widget.pickExecutableFile) {
+            return ext == '.exe' ||
+                ext == '.py' ||
+                ext == '.sh' ||
+                ext == '.rpyc' ||
+                ext == '.rpy' ||
+                ext == '.rpa';
+          }
+          return ext == '.exe' || ext == '.rpa' || ext == '.rpyc';
         }
         return false;
       }).toList();
@@ -79,10 +89,10 @@ class _FolderPickerDialogState extends State<FolderPickerDialog> {
         _entries = filtered;
         _isLoading = false;
       });
-    } catch (e) {
+    } catch (_) {
       setState(() {
         _errorMessage =
-            'ไม่สามารถเข้าถึงโฟลเดอร์นี้ได้ (กรุณาเปิดสิทธิ์ All Files Access ในหน้าตั้งค่า)';
+            'ระบบต้องการสิทธิ์เข้าถึงพื้นที่จัดเก็บข้อมูล (All Files Access) เพื่ออ่านโฟลเดอร์เกม';
         _isLoading = false;
       });
     }
@@ -95,154 +105,484 @@ class _FolderPickerDialogState extends State<FolderPickerDialog> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+  bool _looksLikeRenpyDirectory(Directory dir) {
+    try {
+      if (Directory(p.join(dir.path, 'game')).existsSync()) return true;
+      for (final child in dir.listSync(followLinks: false)) {
+        if (child is File) {
+          final ext = p.extension(child.path).toLowerCase();
+          if (ext == '.rpa' || ext == '.rpyc' || ext == '.rpy') return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
 
-    return AlertDialog(
-      title: Row(
-        children: [
-          Icon(
-            widget.pickExecutableFile
-                ? Icons.terminal_rounded
-                : Icons.folder_open_rounded,
-            color: Colors.purpleAccent,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              widget.pickExecutableFile
-                  ? 'เลือกไฟล์เกม (.exe)'
-                  : 'เลือกโฟลเดอร์เกม Ren\'Py',
-              style: const TextStyle(fontSize: 18),
+  Future<void> _promptManualPath() async {
+    final controller = TextEditingController(text: _currentPath);
+    final entered = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(
+          'ระบุพาธโฟลเดอร์โดยตรง',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+        ),
+        content: TextField(
+          controller: controller,
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+          decoration: InputDecoration(
+            labelText: 'พาธโฟลเดอร์เกม',
+            filled: true,
+            fillColor: const Color(0xFF090B10),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
             ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('ยกเลิก'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('ไปที่พาธนี้'),
           ),
         ],
       ),
-      content: SizedBox(
-        width: double.maxFinite,
-        height: 400,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Current path bar + Up button
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.black26,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
+    );
+    if (entered != null && entered.isNotEmpty) {
+      await _loadDirectory(entered);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isCurrentRenpy = _looksLikeRenpyDirectory(Directory(_currentPath));
+
+    return Dialog(
+      backgroundColor: const Color(0xFF11151F),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: Color(0xFF232A3B), width: 1),
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480, maxHeight: 580),
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Header
+              Row(
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_upward_rounded, size: 20),
-                    tooltip: 'ขึ้นไปโฟลเดอร์ก่อนหน้า',
-                    onPressed: _navigateUp,
-                  ),
-                  Expanded(
-                    child: Text(
-                      _currentPath,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        fontFamily: 'monospace',
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF3B82F6).withOpacity(0.14),
+                      borderRadius: BorderRadius.circular(9),
+                      border: Border.all(
+                        color: const Color(0xFF3B82F6).withOpacity(0.4),
                       ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                    ),
+                    child: Icon(
+                      widget.pickExecutableFile
+                          ? Icons.terminal_rounded
+                          : Icons.folder_open_rounded,
+                      color: const Color(0xFF60A5FA),
+                      size: 19,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.pickExecutableFile
+                              ? 'เลือกไฟล์เปิดเกม (.exe / .rpyc / .rpa)'
+                              : 'เลือกโฟลเดอร์เกม Ren\'Py',
+                          style: const TextStyle(
+                            color: Color(0xFFF3F6FC),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          'เปิดเข้าไปในโฟลเดอร์หลักของเกมแล้วกดปุ่มเลือกโฟลเดอร์',
+                          style: TextStyle(
+                            color: Color(0xFF94A3B8),
+                            fontSize: 11.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'พิมพ์พาธเอง',
+                    icon: const Icon(
+                      Icons.edit_road_rounded,
+                      size: 19,
+                      color: Color(0xFF94A3B8),
+                    ),
+                    onPressed: _promptManualPath,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // Quick Bookmarks
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _buildQuickPathBtn(
+                      label: 'Download',
+                      icon: Icons.download_rounded,
+                      target: p.join(_extRoot, 'Download'),
+                    ),
+                    const SizedBox(width: 8),
+                    _buildQuickPathBtn(
+                      label: 'Internal Root',
+                      icon: Icons.storage_rounded,
+                      target: _extRoot,
+                    ),
+                    const SizedBox(width: 8),
+                    _buildQuickPathBtn(
+                      label: 'Documents',
+                      icon: Icons.folder_copy_rounded,
+                      target: p.join(_extRoot, 'Documents'),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // Current Path Bar
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF090B10),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isCurrentRenpy
+                        ? const Color(0xFF10B981).withOpacity(0.5)
+                        : const Color(0xFF232A3B),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    InkWell(
+                      borderRadius: BorderRadius.circular(6),
+                      onTap: _navigateUp,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF171C29),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Icon(
+                          Icons.arrow_upward_rounded,
+                          size: 16,
+                          color: Color(0xFFF3F6FC),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _currentPath,
+                        style: const TextStyle(
+                          color: Color(0xFFCBD5E1),
+                          fontSize: 11.5,
+                          fontFamily: 'monospace',
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (isCurrentRenpy)
+                      Container(
+                        margin: const EdgeInsets.only(left: 6),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981).withOpacity(0.16),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: const Color(0xFF10B981).withOpacity(0.45),
+                          ),
+                        ),
+                        child: const Text(
+                          'REN\'PY READY',
+                          style: TextStyle(
+                            color: Color(0xFF34D399),
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // Directory Entries
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF090B10),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF232A3B)),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: _isLoading
+                      ? const Center(
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Color(0xFF3B82F6),
+                          ),
+                        )
+                      : _errorMessage != null
+                          ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(20),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.lock_outline_rounded,
+                                      size: 40,
+                                      color: Color(0xFFF59E0B),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      _errorMessage!,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        color: Color(0xFFCBD5E1),
+                                        fontSize: 12.5,
+                                        height: 1.4,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 14),
+                                    FilledButton.icon(
+                                      onPressed: () async {
+                                        await RenpyBridge
+                                            .requestAllFilesAccess();
+                                        await _loadDirectory(_currentPath);
+                                      },
+                                      icon: const Icon(
+                                        Icons.verified_user_rounded,
+                                        size: 16,
+                                      ),
+                                      label: const Text(
+                                        'อนุญาตสิทธิ์เข้าถึงไฟล์',
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : _entries.isEmpty
+                              ? const Center(
+                                  child: Text(
+                                    'ไม่มีโฟลเดอร์ย่อยในตำแหน่งนี้ สามารถกดเลือกโฟลเดอร์นี้ได้ทันที',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: Color(0xFF64748B),
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                )
+                              : ListView.separated(
+                                  itemCount: _entries.length,
+                                  separatorBuilder: (_, __) => const Divider(
+                                    height: 1,
+                                    color: Color(0xFF171C29),
+                                  ),
+                                  itemBuilder: (context, index) {
+                                    final entity = _entries[index];
+                                    final isDir = entity is Directory;
+                                    final name = p.basename(entity.path);
+                                    final isRenpyFolder = isDir &&
+                                        _looksLikeRenpyDirectory(entity);
+
+                                    return ListTile(
+                                      dense: true,
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 2,
+                                      ),
+                                      leading: Container(
+                                        width: 32,
+                                        height: 32,
+                                        decoration: BoxDecoration(
+                                          color: isRenpyFolder
+                                              ? const Color(0xFF10B981)
+                                                  .withOpacity(0.15)
+                                              : isDir
+                                                  ? const Color(0xFF3B82F6)
+                                                      .withOpacity(0.12)
+                                                  : const Color(0xFF06B6D4)
+                                                      .withOpacity(0.12),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                        ),
+                                        child: Icon(
+                                          isDir
+                                              ? Icons.folder_rounded
+                                              : Icons.insert_drive_file_rounded,
+                                          size: 17,
+                                          color: isRenpyFolder
+                                              ? const Color(0xFF34D399)
+                                              : isDir
+                                                  ? const Color(0xFF60A5FA)
+                                                  : const Color(0xFF22D3EE),
+                                        ),
+                                      ),
+                                      title: Text(
+                                        name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: Color(0xFFF3F6FC),
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                      trailing: isRenpyFolder
+                                          ? Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 6,
+                                                vertical: 2,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF10B981)
+                                                    .withOpacity(0.16),
+                                                borderRadius:
+                                                    BorderRadius.circular(5),
+                                              ),
+                                              child: const Text(
+                                                'GAME',
+                                                style: TextStyle(
+                                                  color: Color(0xFF34D399),
+                                                  fontSize: 9.5,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                            )
+                                          : isDir
+                                              ? const Icon(
+                                                  Icons.chevron_right_rounded,
+                                                  size: 18,
+                                                  color: Color(0xFF64748B),
+                                                )
+                                              : null,
+                                      onTap: () {
+                                        if (isDir) {
+                                          _loadDirectory(entity.path);
+                                        } else {
+                                          Navigator.pop(context, entity.path);
+                                        }
+                                      },
+                                    );
+                                  },
+                                ),
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // Actions
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text(
+                      'ยกเลิก',
+                      style: TextStyle(color: Color(0xFF94A3B8)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF3B82F6),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    onPressed: () => Navigator.pop(context, _currentPath),
+                    icon: const Icon(Icons.check_rounded, size: 17),
+                    label: const Text(
+                      'เลือกโฟลเดอร์นี้',
+                      style: TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 8),
-
-            // Directory list
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _errorMessage != null
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.lock_outline_rounded,
-                                    size: 48, color: Colors.orange),
-                                const SizedBox(height: 12),
-                                Text(
-                                  _errorMessage!,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(fontSize: 13),
-                                ),
-                                const SizedBox(height: 12),
-                                OutlinedButton.icon(
-                                  onPressed: () async {
-                                    await RenpyBridge.requestAllFilesAccess();
-                                    _loadDirectory(_currentPath);
-                                  },
-                                  icon: const Icon(Icons.security_rounded),
-                                  label: const Text('เปิดสิทธิ์เข้าถึงไฟล์'),
-                                ),
-                              ],
-                            ),
-                          ),
-                        )
-                      : _entries.isEmpty
-                          ? const Center(
-                              child: Text(
-                                'ไม่มีโฟลเดอร์ย่อยหรือไฟล์ที่รองรับในหน้านี้',
-                                style: TextStyle(color: Colors.grey),
-                              ),
-                            )
-                          : ListView.separated(
-                              itemCount: _entries.length,
-                              separatorBuilder: (_, __) =>
-                                  const Divider(height: 1),
-                              itemBuilder: (context, index) {
-                                final entity = _entries[index];
-                                final isDir = entity is Directory;
-                                final name = p.basename(entity.path);
-
-                                return ListTile(
-                                  dense: true,
-                                  leading: Icon(
-                                    isDir
-                                        ? Icons.folder_rounded
-                                        : Icons.insert_drive_file_rounded,
-                                    color: isDir
-                                        ? Colors.amber
-                                        : Colors.lightBlueAccent,
-                                  ),
-                                  title: Text(
-                                    name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  onTap: () {
-                                    if (isDir) {
-                                      _loadDirectory(entity.path);
-                                    } else {
-                                      Navigator.pop(context, entity.path);
-                                    }
-                                  },
-                                );
-                              },
-                            ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('ยกเลิก'),
-        ),
-        if (!widget.pickExecutableFile)
-          FilledButton.icon(
-            onPressed: () => Navigator.pop(context, _currentPath),
-            icon: const Icon(Icons.check_rounded, size: 18),
-            label: const Text('เลือกโฟลเดอร์นี้'),
+    );
+  }
+
+  Widget _buildQuickPathBtn({
+    required String label,
+    required IconData icon,
+    required String target,
+  }) {
+    final bool active = _currentPath == target;
+    return Material(
+      color: active ? const Color(0xFF1E293B) : const Color(0xFF171C29),
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => _loadDirectory(target),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: active
+                  ? const Color(0xFF3B82F6).withOpacity(0.6)
+                  : const Color(0xFF232A3B),
+            ),
           ),
-      ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 14,
+                color: active
+                    ? const Color(0xFF60A5FA)
+                    : const Color(0xFF94A3B8),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: active
+                      ? const Color(0xFFF3F6FC)
+                      : const Color(0xFFCBD5E1),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

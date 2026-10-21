@@ -3,11 +3,17 @@ import 'package:flutter/services.dart';
 
 class VirtualGamepadOverlay extends StatefulWidget {
   final double opacity;
+  final bool isAutoActive;
+  final bool isSkipActive;
+  final bool canRollback;
   final Function(String action)? onActionTriggered;
 
   const VirtualGamepadOverlay({
     super.key,
-    this.opacity = 0.75,
+    this.opacity = 0.88,
+    this.isAutoActive = false,
+    this.isSkipActive = false,
+    this.canRollback = false,
     this.onActionTriggered,
   });
 
@@ -17,16 +23,9 @@ class VirtualGamepadOverlay extends StatefulWidget {
 
 class _VirtualGamepadOverlayState extends State<VirtualGamepadOverlay> {
   bool _isCollapsed = false;
-  double _opacity = 0.75;
 
-  @override
-  void initState() {
-    super.initState();
-    _opacity = widget.opacity;
-  }
-
-  void _triggerKey(String action, LogicalKeyboardKey? key) {
-    HapticFeedback.lightImpact();
+  void _trigger(String action) {
+    HapticFeedback.selectionClick();
     widget.onActionTriggered?.call(action);
   }
 
@@ -36,114 +35,145 @@ class _VirtualGamepadOverlayState extends State<VirtualGamepadOverlay> {
       child: SafeArea(
         child: Stack(
           children: [
-            // Floating control pill at the top right to collapse/expand
+            // Top-right HUD visibility toggle
             Positioned(
-              top: 10,
-              right: 10,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.6),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: Icon(
-                        _isCollapsed
-                            ? Icons.gamepad_rounded
-                            : Icons.visibility_off_rounded,
-                        color: Colors.white,
-                        size: 20,
+              top: 52,
+              right: 12,
+              child: Opacity(
+                opacity: widget.opacity,
+                child: Material(
+                  color: const Color(0xD9090B10),
+                  borderRadius: BorderRadius.circular(10),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: () {
+                      setState(() {
+                        _isCollapsed = !_isCollapsed;
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
                       ),
-                      tooltip: _isCollapsed ? 'แสดงปุ่มกด' : 'ซ่อนปุ่มกด',
-                      onPressed: () {
-                        setState(() {
-                          _isCollapsed = !_isCollapsed;
-                        });
-                      },
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFF232A3B)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _isCollapsed
+                                ? Icons.tune_rounded
+                                : Icons.keyboard_hide_rounded,
+                            color: const Color(0xFF94A3B8),
+                            size: 16,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            _isCollapsed ? 'HUD' : 'ซ่อนปุ่ม',
+                            style: const TextStyle(
+                              color: Color(0xFFCBD5E1),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
 
             if (!_isCollapsed) ...[
-              // Left Quick Actions (Menu, Rollback, Hide UI)
+              // Left Vertical Control Strip (ESC, LOG, BACK, HIDE)
               Positioned(
-                left: 16,
-                bottom: 80,
+                left: 12,
+                bottom: 24,
                 child: Opacity(
-                  opacity: _opacity,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildOverlayButton(
-                        label: 'ESC',
-                        subtitle: 'Menu',
-                        icon: Icons.menu_rounded,
-                        color: Colors.indigo,
-                        onTap: () =>
-                            _triggerKey('ESC', LogicalKeyboardKey.escape),
-                      ),
-                      const SizedBox(height: 12),
-                      _buildOverlayButton(
-                        label: 'BACK',
-                        subtitle: 'Rollback',
-                        icon: Icons.replay_rounded,
-                        color: Colors.blueGrey,
-                        onTap: () =>
-                            _triggerKey('PAGE_UP', LogicalKeyboardKey.pageUp),
-                      ),
-                      const SizedBox(height: 12),
-                      _buildOverlayButton(
-                        label: 'HIDE',
-                        subtitle: 'Text',
-                        icon: Icons.remove_red_eye_outlined,
-                        color: Colors.teal,
-                        onTap: () => _triggerKey('H', LogicalKeyboardKey.keyH),
-                      ),
-                    ],
+                  opacity: widget.opacity,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xD9090B10),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFF232A3B)),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildHudButton(
+                          label: 'MENU',
+                          icon: Icons.grid_view_rounded,
+                          onTap: () => _trigger('ESC'),
+                        ),
+                        const SizedBox(height: 6),
+                        _buildHudButton(
+                          label: 'LOG',
+                          icon: Icons.subject_rounded,
+                          onTap: () => _trigger('LOG'),
+                        ),
+                        const SizedBox(height: 6),
+                        _buildHudButton(
+                          label: 'BACK',
+                          icon: Icons.undo_rounded,
+                          enabled: widget.canRollback,
+                          onTap: () => _trigger('PAGE_UP'),
+                        ),
+                        const SizedBox(height: 6),
+                        _buildHudButton(
+                          label: 'HIDE',
+                          icon: Icons.visibility_off_outlined,
+                          onTap: () => _trigger('H'),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
 
-              // Right Quick Actions (Skip, Auto, Next/Enter)
+              // Right Vertical Control Strip (SKIP, AUTO, NEXT)
               Positioned(
-                right: 16,
-                bottom: 80,
+                right: 12,
+                bottom: 24,
                 child: Opacity(
-                  opacity: _opacity,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildOverlayButton(
-                        label: 'SKIP',
-                        subtitle: 'Ctrl',
-                        icon: Icons.fast_forward_rounded,
-                        color: Colors.deepOrange,
-                        onTap: () => _triggerKey(
-                            'CTRL', LogicalKeyboardKey.controlLeft),
-                      ),
-                      const SizedBox(height: 12),
-                      _buildOverlayButton(
-                        label: 'AUTO',
-                        subtitle: 'Read',
-                        icon: Icons.play_arrow_rounded,
-                        color: Colors.amber.shade800,
-                        onTap: () => _triggerKey('A', LogicalKeyboardKey.keyA),
-                      ),
-                      const SizedBox(height: 12),
-                      _buildOverlayButton(
-                        label: 'NEXT',
-                        subtitle: 'Enter',
-                        icon: Icons.check_circle_outline_rounded,
-                        color: Colors.green.shade700,
-                        size: 64,
-                        onTap: () =>
-                            _triggerKey('ENTER', LogicalKeyboardKey.enter),
-                      ),
-                    ],
+                  opacity: widget.opacity,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xD9090B10),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFF232A3B)),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildHudButton(
+                          label: 'SKIP',
+                          icon: Icons.fast_forward_rounded,
+                          active: widget.isSkipActive,
+                          activeColor: const Color(0xFFF59E0B),
+                          onTap: () => _trigger('CTRL'),
+                        ),
+                        const SizedBox(height: 6),
+                        _buildHudButton(
+                          label: 'AUTO',
+                          icon: Icons.autorenew_rounded,
+                          active: widget.isAutoActive,
+                          activeColor: const Color(0xFF06B6D4),
+                          onTap: () => _trigger('A'),
+                        ),
+                        const SizedBox(height: 6),
+                        _buildHudButton(
+                          label: 'NEXT',
+                          icon: Icons.keyboard_return_rounded,
+                          isPrimary: true,
+                          onTap: () => _trigger('ENTER'),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -154,48 +184,64 @@ class _VirtualGamepadOverlayState extends State<VirtualGamepadOverlay> {
     );
   }
 
-  Widget _buildOverlayButton({
+  Widget _buildHudButton({
     required String label,
-    required String subtitle,
     required IconData icon,
-    required Color color,
     required VoidCallback onTap,
-    double size = 56,
+    bool active = false,
+    bool enabled = true,
+    bool isPrimary = false,
+    Color activeColor = const Color(0xFF3B82F6),
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.85),
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.4),
-              blurRadius: 6,
-              offset: const Offset(0, 3),
-            ),
-          ],
-          border: Border.all(
-            color: Colors.white.withOpacity(0.6),
-            width: 1.5,
+    final Color bg = isPrimary
+        ? const Color(0xFF3B82F6)
+        : active
+            ? activeColor.withOpacity(0.22)
+            : const Color(0xFF171C29);
+
+    final Color border = isPrimary
+        ? const Color(0xFF60A5FA)
+        : active
+            ? activeColor
+            : const Color(0xFF232A3B);
+
+    final Color fg = !enabled
+        ? const Color(0xFF475569)
+        : isPrimary
+            ? Colors.white
+            : active
+                ? activeColor
+                : const Color(0xFFE2E8F0);
+
+    return Material(
+      color: bg,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Container(
+          width: 48,
+          height: isPrimary ? 54 : 46,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: border, width: 1),
           ),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: Colors.white, size: size * 0.4),
-            Text(
-              label,
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: size * 0.2,
-                height: 1.1,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: fg, size: isPrimary ? 20 : 17),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.4,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
