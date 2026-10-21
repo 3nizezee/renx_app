@@ -270,7 +270,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       fillColor: const Color(0xFF090B10),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
-                        side: const BorderSide(color: Color(0xFF232A3B)),
+                        borderSide: const BorderSide(color: Color(0xFF232A3B)),
                       ),
                     ),
                   ),
