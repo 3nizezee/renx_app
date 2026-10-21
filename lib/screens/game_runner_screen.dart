@@ -30,6 +30,7 @@ class _GameRunnerScreenState extends State<GameRunnerScreen> {
   bool _isPluginInstalled = false;
 
   bool _isLoading = true;
+  String _loadingStatus = 'กำลังเตรียมสภาพแวดล้อมเอนจิน...';
   String? _loadError;
   GameFileSystem? _fs;
   ScriptLoadResult? _loadResult;
@@ -61,59 +62,82 @@ class _GameRunnerScreenState extends State<GameRunnerScreen> {
   Future<void> _bootEngine() async {
     setState(() {
       _isLoading = true;
+      _loadingStatus = 'กำลังตรวจสอบโฟลเดอร์เกม...';
       _loadError = null;
     });
 
-    final installed = await RenpyBridge.isPluginInstalled();
-    final savedSlots = await RenpyBridge.loadGameSaveSlots(widget.game.id);
-    final fs = await GameFileSystem.mount(widget.game.path);
-
-    if (fs == null) {
+    void updateStatus(String status) {
       if (mounted) {
         setState(() {
-          _isPluginInstalled = installed;
-          _saveSlots = savedSlots;
-          _isLoading = false;
-          _loadError =
-              'ไม่พบโฟลเดอร์เกมที่ตำแหน่ง:\n${widget.game.path}\nกรุณาตรวจสอบว่าโฟลเดอร์ยังอยู่ในเครื่องและเปิดสิทธิ์เข้าถึงไฟล์แล้ว';
+          _loadingStatus = status;
         });
       }
-      return;
     }
 
-    final scripts = await fs.loadAllScripts();
-    if (scripts.files.isEmpty) {
+    try {
+      final installed = await RenpyBridge.isPluginInstalled();
+      final savedSlots = await RenpyBridge.loadGameSaveSlots(widget.game.id);
+      final fs = await GameFileSystem.mount(
+        widget.game.path,
+        onProgress: updateStatus,
+      );
+
+      if (fs == null) {
+        if (mounted) {
+          setState(() {
+            _isPluginInstalled = installed;
+            _saveSlots = savedSlots;
+            _isLoading = false;
+            _loadError =
+                'ไม่พบโฟลเดอร์เกมที่ตำแหน่ง:\n${widget.game.path}\nกรุณาตรวจสอบว่าโฟลเดอร์ยังอยู่ในเครื่องและเปิดสิทธิ์เข้าถึงไฟล์แล้ว';
+          });
+        }
+        return;
+      }
+
+      final scripts = await fs.loadAllScripts(onProgress: updateStatus);
+      if (scripts.files.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _isPluginInstalled = installed;
+            _saveSlots = savedSlots;
+            _fs = fs;
+            _loadResult = scripts;
+            _isLoading = false;
+            _loadError = scripts.errors.isNotEmpty
+                ? 'ไม่สามารถถอดรหัสไฟล์สคริปต์ของเกมได้:\n${scripts.errors.take(3).join('\n')}'
+                : 'ไม่พบไฟล์สคริปต์ .rpyc หรือ .rpy ที่สามารถรันได้ในโฟลเดอร์:\n${fs.gameDirPath}';
+          });
+        }
+        return;
+      }
+
+      final runtime = RenpyRuntime(fs: fs, loadResult: scripts);
+      final ok = await runtime.initialize(onProgress: updateStatus);
+
       if (mounted) {
         setState(() {
           _isPluginInstalled = installed;
           _saveSlots = savedSlots;
           _fs = fs;
           _loadResult = scripts;
+          _runtime = runtime;
           _isLoading = false;
-          _loadError = scripts.errors.isNotEmpty
-              ? 'ไม่สามารถถอดรหัสไฟล์สคริปต์ของเกมได้:\n${scripts.errors.take(3).join('\n')}'
-              : 'ไม่พบไฟล์สคริปต์ .rpyc หรือ .rpy ที่สามารถรันได้ในโฟลเดอร์:\n${fs.gameDirPath}';
+          if (!ok &&
+              runtime.dialogueText.isEmpty &&
+              runtime.activeChoices.isEmpty) {
+            _loadError =
+                'สคริปต์ของเกมไม่มีจุดเริ่มต้น (label start) หรือคำสั่งเนื้อเรื่องที่รองรับ';
+          }
         });
       }
-      return;
-    }
-
-    final runtime = RenpyRuntime(fs: fs, loadResult: scripts);
-    final ok = await runtime.initialize();
-
-    if (mounted) {
-      setState(() {
-        _isPluginInstalled = installed;
-        _saveSlots = savedSlots;
-        _fs = fs;
-        _loadResult = scripts;
-        _runtime = runtime;
-        _isLoading = false;
-        if (!ok) {
-          _loadError =
-              'สคริปต์ของเกมไม่มีจุดเริ่มต้น (label start) หรือคำสั่งเนื้อเรื่องที่รองรับ';
-        }
-      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _loadError = 'เกิดข้อผิดพลาดขณะโหลดสคริปต์เกม:\n$e';
+        });
+      }
     }
   }
 
@@ -833,8 +857,7 @@ class _GameRunnerScreenState extends State<GameRunnerScreen> {
                               _buildChoicesOverlay(rt.activeChoices),
 
                             // 4. Bottom ADV Dialogue Window
-                            if (!_isUiHidden &&
-                                (rt.dialogueText.isNotEmpty || rt.isFinished))
+                            if (!_isUiHidden && !rt.isWaitingForChoice)
                               _buildDialogueBox(rt),
                           ],
                         ),
@@ -860,42 +883,48 @@ class _GameRunnerScreenState extends State<GameRunnerScreen> {
 
   Widget _buildLoadingView() {
     return Center(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-        decoration: BoxDecoration(
-          color: const Color(0xFF11151F),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFF232A3B)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(
-              width: 32,
-              height: 32,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.5,
-                color: Color(0xFF3B82F6),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 380),
+        child: Container(
+          margin: const EdgeInsets.all(24),
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+          decoration: BoxDecoration(
+            color: const Color(0xFF11151F),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF232A3B)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 32,
+                height: 32,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: Color(0xFF3B82F6),
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'กำลังโหลด ${widget.game.title}',
-              style: const TextStyle(
-                color: Color(0xFFF3F6FC),
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
+              const SizedBox(height: 16),
+              Text(
+                'กำลังโหลด ${widget.game.title}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFFF3F6FC),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'กำลังเมานต์คลังข้อมูล .rpa และถอดรหัสต้นไม้สคริปต์ .rpyc...',
-              style: TextStyle(
-                color: Color(0xFF94A3B8),
-                fontSize: 12,
+              const SizedBox(height: 6),
+              Text(
+                _loadingStatus,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFF94A3B8),
+                  fontSize: 12,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1154,7 +1183,9 @@ class _GameRunnerScreenState extends State<GameRunnerScreen> {
 
     final String displayText = rt.isFinished && rt.dialogueText.isEmpty
         ? 'จบเนื้อเรื่องในส่วนนี้แล้ว กดปุ่ม MENU เพื่อเริ่มใหม่หรือกลับสู่คลังเกม'
-        : rt.dialogueText;
+        : (rt.dialogueText.isNotEmpty
+            ? rt.dialogueText
+            : 'แตะหน้าจอหรือกดปุ่ม NEXT เพื่อดำเนินเนื้อเรื่องต่อ');
 
     return Align(
       alignment: Alignment.bottomCenter,

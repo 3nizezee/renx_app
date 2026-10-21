@@ -113,12 +113,18 @@ class RpycReader {
         ];
 
       case 'Say':
+      case 'TranslateSay':
+        final lang = _exprString(fields['language']);
+        if (lang != null && lang.isNotEmpty && lang != 'None') {
+          return const <ScriptNode>[];
+        }
         final who = _exprString(fields['who']);
         final what = _exprString(fields['what']) ?? '';
         final withExpr = _exprString(fields['with_']);
-        final interact = fields['interact'] is bool
-            ? fields['interact'] as bool
-            : true;
+        final rawInteract = fields['interact'];
+        final interact = rawInteract is bool
+            ? rawInteract
+            : (rawInteract == 0 ? false : true);
         final attrs = _stringList(fields['attributes']);
         final tempAttrs = _stringList(fields['temporary_attributes']);
         return <ScriptNode>[
@@ -467,7 +473,8 @@ class RpycReader {
     if (codeObj is PyObject) {
       final f = codeObj.fields;
       if (f.containsKey('source')) {
-        return _exprString(f['source']);
+        final s = _exprString(f['source']);
+        if (s != null) return s;
       }
       if (codeObj.state is List) {
         final stateList = codeObj.state as List;
@@ -475,9 +482,16 @@ class RpycReader {
           final s = _exprString(stateList[1]);
           if (s != null) return s;
         }
+        for (final item in stateList) {
+          if (item is List && item.length >= 2) {
+            final s = _exprString(item[1]);
+            if (s != null) return s;
+          }
+        }
       }
       if (codeObj.args.isNotEmpty) {
-        return _exprString(codeObj.args.first);
+        final s = _exprString(codeObj.args.first);
+        if (s != null) return s;
       }
     }
     return null;
@@ -505,23 +519,25 @@ class RpycReader {
   }
 
   static String? _exprString(dynamic v) {
-    if (v == null) return null;
+    if (v == null || v is PyClassRef) return null;
     if (v is String) return v;
     if (v is Uint8List) {
       return utf8.decode(v, allowMalformed: true);
     }
     if (v is PyObject) {
-      if (v.args.isNotEmpty && v.args.first != null) {
-        final first = v.args.first;
-        if (first is String) return first;
-        if (first is Uint8List) {
-          return utf8.decode(first, allowMalformed: true);
+      for (final arg in v.args) {
+        if (arg is String) return arg;
+        if (arg is Uint8List) {
+          return utf8.decode(arg, allowMalformed: true);
         }
       }
       final f = v.fields;
       if (f['source'] != null) return _exprString(f['source']);
+      if (f['s'] != null) return _exprString(f['s']);
+      return null;
     }
-    return v.toString();
+    if (v is num || v is bool) return v.toString();
+    return null;
   }
 
   static List<String> _stringList(dynamic v) {

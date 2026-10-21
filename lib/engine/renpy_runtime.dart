@@ -246,7 +246,7 @@ class RenpyRuntime {
 
   /// Indexes all blocks & labels, executes all `init` / `define` / `default` /
   /// `image` statements, and advances to the first interactive dialogue or menu.
-  Future<bool> initialize() async {
+  Future<bool> initialize({void Function(String status)? onProgress}) async {
     _blocksById.clear();
     _labels.clear();
     _definedImages.clear();
@@ -254,6 +254,9 @@ class RenpyRuntime {
     _stack.clear();
     _rollbackStack.clear();
     historyLog.clear();
+
+    onProgress?.call('กำลังลงทะเบียนบล็อกสคริปต์และตัวแปรเริ่มต้น...');
+    await Future<void>.delayed(Duration.zero);
 
     // 1. Register blocks and collect init statements + labels
     final initEntries = <_InitEntry>[];
@@ -279,20 +282,15 @@ class RenpyRuntime {
       return cmp != 0 ? cmp : a.order.compareTo(b.order);
     });
 
-    for (final entry in initEntries) {
-      _executeInitStatement(entry.node);
+    for (int i = 0; i < initEntries.length; i++) {
+      if (i > 0 && i % 100 == 0) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      _executeInitStatement(initEntries[i].node);
     }
 
     // 3. Locate entry point (`label start` is standard in Ren'Py)
-    _LabelLocation? entryLabel = _labels['start'];
-    if (entryLabel == null) {
-      for (final e in _labels.entries) {
-        if (e.key.toLowerCase() == 'start') {
-          entryLabel = e.value;
-          break;
-        }
-      }
-    }
+    _LabelLocation? entryLabel = await _resolveLabelAsync('start');
     if (entryLabel == null && _labels.isNotEmpty) {
       // Prefer a label from `script.rpyc` / `script.rpy` if present
       for (final loc in _labels.values) {
@@ -308,7 +306,6 @@ class RenpyRuntime {
     if (entryLabel != null) {
       _jumpToLabelLocation(entryLabel);
     } else if (loadResult.files.isNotEmpty) {
-      // Fallback for label-less scripts: run the first file's top-level block
       final firstFile = loadResult.files.first;
       _stack.add(_ExecFrame(blockId: firstFile.block.id, index: 0));
     } else {
@@ -316,9 +313,56 @@ class RenpyRuntime {
       return false;
     }
 
+    onProgress?.call('กำลังเริ่มรันเนื้อเรื่องหลัก...');
+    await Future<void>.delayed(Duration.zero);
+
     isFinished = false;
     await _advanceUntilInteractive(recordSnapshotBeforeAdvance: false);
-    return true;
+
+    // If `label start` only invoked a custom screen and returned immediately
+    // without showing any dialogue or menu, advance into the first label that
+    // contains interactive story dialogue.
+    if (stepCount == 0 && dialogueText.isEmpty && activeChoices.isEmpty) {
+      final fallbackLabel = _findFirstInteractiveLabel();
+      if (fallbackLabel != null) {
+        _stack.clear();
+        isFinished = false;
+        _jumpToLabelLocation(fallbackLabel);
+        await _advanceUntilInteractive(recordSnapshotBeforeAdvance: false);
+      }
+    }
+
+    return dialogueText.isNotEmpty ||
+        activeChoices.isNotEmpty ||
+        _labels.isNotEmpty;
+  }
+
+  _LabelLocation? _findFirstInteractiveLabel() {
+    for (final loc in _labels.values) {
+      if (loc.node.name.toLowerCase() == 'start' ||
+          loc.node.name.toLowerCase() == 'splashscreen' ||
+          loc.node.name.startsWith('_')) {
+        continue;
+      }
+      if (_blockHasInteractiveNode(loc.node.block)) {
+        return loc;
+      }
+    }
+    return null;
+  }
+
+  static bool _blockHasInteractiveNode(ScriptBlock block) {
+    for (final node in block.nodes) {
+      if (node is SayNode || node is MenuNode) return true;
+      if (node is IfNode &&
+          node.branches.any((b) => _blockHasInteractiveNode(b.block))) {
+        return true;
+      }
+      if (node is LabelNode && _blockHasInteractiveNode(node.block)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void _indexBlock(
@@ -401,29 +445,31 @@ class RenpyRuntime {
   }
 
   void _executeInitStatement(ScriptNode node) {
-    if (node is DefineNode) {
-      final val = py.evaluate(node.expression);
-      py.applyAssignment(node.name, node.operator, val);
-    } else if (node is DefaultNode) {
-      final clean = node.name.startsWith('store.')
-          ? node.name.substring(6)
-          : node.name;
-      if (!py.store.containsKey(clean)) {
-        py.store[clean] = py.evaluate(node.expression);
-      }
-    } else if (node is ImageNode) {
-      final key = node.name.join(' ').toLowerCase().trim();
-      if (node.expression != null && node.expression!.trim().isNotEmpty) {
-        final evaluated = py.evaluate(node.expression!);
-        if (evaluated is SolidDisplayable) {
-          _definedSolids[key] = evaluated.colorHex;
-        } else if (evaluated is String && evaluated.trim().isNotEmpty) {
-          _definedImages[key] = evaluated.trim();
+    try {
+      if (node is DefineNode) {
+        final val = py.evaluate(node.expression);
+        py.applyAssignment(node.name, node.operator, val);
+      } else if (node is DefaultNode) {
+        final clean = node.name.startsWith('store.')
+            ? node.name.substring(6)
+            : node.name;
+        if (!py.store.containsKey(clean)) {
+          py.store[clean] = py.evaluate(node.expression);
         }
+      } else if (node is ImageNode) {
+        final key = node.name.join(' ').toLowerCase().trim();
+        if (node.expression != null && node.expression!.trim().isNotEmpty) {
+          final evaluated = py.evaluate(node.expression!);
+          if (evaluated is SolidDisplayable) {
+            _definedSolids[key] = evaluated.colorHex;
+          } else if (evaluated is String && evaluated.trim().isNotEmpty) {
+            _definedImages[key] = evaluated.trim();
+          }
+        }
+      } else if (node is PythonNode) {
+        py.execute(node.source);
       }
-    } else if (node is PythonNode) {
-      py.execute(node.source);
-    }
+    } catch (_) {}
   }
 
   /// Advances the script past the current dialogue line. If a choice menu is
@@ -452,7 +498,7 @@ class RenpyRuntime {
 
   /// Jumps directly to a named label (used by the developer/chapter jump menu).
   Future<bool> jumpToLabel(String labelName) async {
-    final loc = _findLabel(labelName);
+    final loc = await _resolveLabelAsync(labelName);
     if (loc == null) return false;
     _pushRollbackSnapshot();
     activeChoices = const <ActiveChoice>[];
@@ -541,9 +587,14 @@ class RenpyRuntime {
 
     currentTransition = null;
     int safetyCounter = 0;
+    final whileVisits = <String, int>{};
 
     while (_stack.isNotEmpty && safetyCounter < _maxNonInteractiveSteps) {
       safetyCounter++;
+      if (safetyCounter % 60 == 0) {
+        await Future<void>.delayed(Duration.zero);
+      }
+
       final frame = _stack.last;
       final block = _blocksById[frame.blockId];
 
@@ -600,7 +651,7 @@ class RenpyRuntime {
         final targetName = node.isExpression
             ? (py.evaluate(node.target)?.toString() ?? node.target)
             : node.target;
-        final loc = _findLabel(targetName);
+        final loc = await _resolveLabelAsync(targetName);
         if (loc != null) {
           _popToCallBoundary();
           _jumpToLabelLocation(loc);
@@ -612,7 +663,7 @@ class RenpyRuntime {
         final targetName = node.isExpression
             ? (py.evaluate(node.target)?.toString() ?? node.target)
             : node.target;
-        final loc = _findLabel(targetName);
+        final loc = await _resolveLabelAsync(targetName);
         if (loc != null) {
           if (_stack.isNotEmpty) {
             _stack.last.isCallBoundary = true;
@@ -654,8 +705,10 @@ class RenpyRuntime {
       }
 
       if (node is WhileNode) {
-        if (py.evalBool(node.condition)) {
-          // Re-run this WhileNode after its body completes
+        final loopKey = '${frame.blockId}:${frame.index}';
+        final count = (whileVisits[loopKey] ?? 0) + 1;
+        whileVisits[loopKey] = count;
+        if (count <= 24 && py.evalBool(node.condition)) {
           frame.index--;
           _stack.add(_ExecFrame(blockId: node.block.id, index: 0));
         }
@@ -664,10 +717,13 @@ class RenpyRuntime {
 
       if (node is PythonNode) {
         py.pendingJump = null;
-        py.execute(node.source);
+        try {
+          py.execute(node.source);
+        } catch (_) {}
         if (py.pendingJump != null) {
-          final loc = _findLabel(py.pendingJump!);
+          final target = py.pendingJump!;
           py.pendingJump = null;
+          final loc = await _resolveLabelAsync(target);
           if (loc != null) {
             _popToCallBoundary();
             _jumpToLabelLocation(loc);
@@ -810,6 +866,21 @@ class RenpyRuntime {
           blockId: c.block.id,
         ),
       );
+    }
+
+    if (visible.isEmpty && node.choices.isNotEmpty) {
+      // Fallback: if all choice conditions evaluated to false due to custom
+      // external Python functions, display all choices so the player can proceed.
+      for (int i = 0; i < node.choices.length; i++) {
+        final c = node.choices[i];
+        visible.add(
+          ActiveChoice(
+            index: i,
+            text: py.formatText(c.text),
+            blockId: c.block.id,
+          ),
+        );
+      }
     }
 
     if (visible.isEmpty) {
@@ -992,6 +1063,49 @@ class RenpyRuntime {
       if (entry.key.toLowerCase() == lower) return entry.value;
     }
     return null;
+  }
+
+  /// Resolves a label by name, decoding any deferred script files on demand if
+  /// the label is not yet in [_labels].
+  Future<_LabelLocation?> _resolveLabelAsync(String name) async {
+    final existing = _findLabel(name);
+    if (existing != null) return existing;
+
+    if (fs.deferredScripts.isEmpty) return null;
+
+    final lower = name.trim().toLowerCase();
+    // Prioritize deferred script files whose filename matches the target label
+    fs.deferredScripts.sort((a, b) {
+      final aMatch = a.stem.toLowerCase().contains(lower) ? 0 : 1;
+      final bMatch = b.stem.toLowerCase().contains(lower) ? 0 : 1;
+      return aMatch.compareTo(bMatch);
+    });
+
+    while (fs.deferredScripts.isNotEmpty) {
+      final nextPair = fs.deferredScripts.removeAt(0);
+      final scriptFile = await fs.decodeCandidatePair(nextPair);
+      if (scriptFile != null && scriptFile.block.nodes.isNotEmpty) {
+        fs.assignBlockIds(scriptFile.block);
+        loadResult.files.add(scriptFile);
+        final newInits = <_InitEntry>[];
+        int order = 0;
+        _indexBlock(
+          scriptFile.block,
+          initEntries: newInits,
+          priority: 0,
+          insideInit: false,
+          nextOrder: () => order++,
+        );
+        py.knownLabels.addAll(_labels.keys);
+        for (final entry in newInits) {
+          _executeInitStatement(entry.node);
+        }
+        final found = _findLabel(name);
+        if (found != null) return found;
+      }
+    }
+
+    return _findLabel(name);
   }
 
   void _popToCallBoundary() {

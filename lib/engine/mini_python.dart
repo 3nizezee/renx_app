@@ -90,7 +90,9 @@ class MiniPython {
 
   /// Executes a single-line or multi-line Python block against [store].
   void execute(String source) {
+    if (source.length > 24000) return;
     final lines = source.replaceAll('\r\n', '\n').split('\n');
+    if (lines.length > 400) return;
     _execBlock(lines, 0, lines.length);
   }
 
@@ -101,9 +103,37 @@ class MiniPython {
       final trimmed = _stripInlineComment(raw).trim();
       if (trimmed.isEmpty ||
           trimmed == 'pass' ||
+          trimmed == 'break' ||
+          trimmed == 'continue' ||
+          trimmed.startsWith('return') ||
+          trimmed.startsWith('global ') ||
           trimmed.startsWith('import ') ||
-          trimmed.startsWith('from ')) {
+          trimmed.startsWith('from ') ||
+          trimmed.startsWith('@')) {
         i++;
+        continue;
+      }
+
+      // Skip complex compound blocks (def, class, for, while, try, except, with)
+      if (trimmed.endsWith(':') &&
+          (trimmed.startsWith('def ') ||
+              trimmed.startsWith('class ') ||
+              trimmed.startsWith('for ') ||
+              trimmed.startsWith('while ') ||
+              trimmed.startsWith('try:') ||
+              trimmed.startsWith('try ') ||
+              trimmed.startsWith('except') ||
+              trimmed.startsWith('finally') ||
+              trimmed.startsWith('with '))) {
+        final baseIndent = _indentOf(raw);
+        i++;
+        while (i < end) {
+          final nextTrim = _stripInlineComment(lines[i]).trim();
+          if (nextTrim.isNotEmpty && _indentOf(lines[i]) <= baseIndent) {
+            break;
+          }
+          i++;
+        }
         continue;
       }
 
@@ -181,28 +211,50 @@ class MiniPython {
   }
 
   void _execSingleStatement(String stmt) {
+    if (stmt.length > 2000) return;
+
     // Handle `renpy.jump("label")`
-    final jumpCall = RegExp(
-            r'''^renpy\.jump\(\s*['"]([^'"]+)['"]\s*\)$''')
-        .firstMatch(stmt);
-    if (jumpCall != null) {
-      pendingJump = jumpCall.group(1);
-      return;
+    if (stmt.startsWith('renpy.jump(')) {
+      final jumpCall =
+          RegExp(r'''^renpy\.jump\(\s*['"]([^'"]+)['"]\s*\)$''')
+              .firstMatch(stmt);
+      if (jumpCall != null) {
+        pendingJump = jumpCall.group(1);
+        return;
+      }
     }
 
-    // Handle ` variable += expr`, `-=`, `*=`, `/=`, `|=`, `=`
-    final assignMatch = RegExp(
-      r'^([a-zA-Z_][a-zA-Z0-9_.]*(?:\s*,\s*[a-zA-Z_][a-zA-Z0-9_.]*)*)\s*(\+=|-=|\*=|/=|\|=|=)(?!=)\s*(.+)$',
-      dotAll: true,
-    ).firstMatch(stmt);
+    // Fast O(N) top-level assignment detection (`+=`, `-=`, `*=`, `/=`, `|=`, `=`)
+    final assignParts = _splitTopLevelAssignment(stmt);
+    if (assignParts != null) {
+      final lhsRaw = assignParts[0];
+      final op = assignParts[1];
+      final rhsRaw = assignParts[2];
 
-    if (assignMatch != null) {
-      final lhsRaw = assignMatch.group(1)!.trim();
-      final op = assignMatch.group(2)!;
-      final rhsRaw = assignMatch.group(3)!.trim();
+      // Handle dictionary subscript assignment: `dict_var[key] = val`
+      if (lhsRaw.contains('[') && lhsRaw.endsWith(']') && op == '=') {
+        final bracketIdx = lhsRaw.indexOf('[');
+        final targetName = _cleanVarName(lhsRaw.substring(0, bracketIdx));
+        final keyExpr = lhsRaw.substring(bracketIdx + 1, lhsRaw.length - 1);
+        final keyVal = evaluate(keyExpr);
+        final rhsVal = evaluate(rhsRaw);
+        final container = store[targetName];
+        if (container is Map && keyVal != null) {
+          container[keyVal] = rhsVal;
+        } else if (container is List && keyVal is int) {
+          if (keyVal >= 0 && keyVal < container.length) {
+            container[keyVal] = rhsVal;
+          }
+        }
+        return;
+      }
 
       if (lhsRaw.contains(',') && op == '=') {
-        final targets = lhsRaw.split(',').map((s) => _cleanVarName(s.trim())).toList();
+        final targets = lhsRaw
+            .split(',')
+            .map((s) => _cleanVarName(s.trim()))
+            .where((s) => s.isNotEmpty)
+            .toList();
         final rhsVal = evaluate(rhsRaw);
         if (rhsVal is List) {
           for (int k = 0; k < targets.length && k < rhsVal.length; k++) {
@@ -213,54 +265,110 @@ class MiniPython {
       }
 
       final varName = _cleanVarName(lhsRaw);
-      final rhsVal = evaluate(rhsRaw);
-      applyAssignment(varName, op, rhsVal);
-      return;
-    }
-
-    // Handle dictionary subscript assignment: `dict_var[key] = val`
-    final subAssign = RegExp(
-      r'^([a-zA-Z_][a-zA-Z0-9_.]*)\[(.+?)\]\s*=\s*(.+)$',
-    ).firstMatch(stmt);
-    if (subAssign != null) {
-      final targetName = _cleanVarName(subAssign.group(1)!);
-      final keyVal = evaluate(subAssign.group(2)!);
-      final rhsVal = evaluate(subAssign.group(3)!);
-      final container = store[targetName];
-      if (container is Map && keyVal != null) {
-        container[keyVal] = rhsVal;
-      } else if (container is List && keyVal is int) {
-        if (keyVal >= 0 && keyVal < container.length) {
-          container[keyVal] = rhsVal;
-        }
+      if (RegExp(r'^[a-zA-Z_][a-zA-Z0-9_.]*$').hasMatch(varName)) {
+        final rhsVal = evaluate(rhsRaw);
+        applyAssignment(varName, op, rhsVal);
       }
       return;
     }
 
     // Handle `.append(...)` / `.add(...)` / `.remove(...)`
-    final methodCall = RegExp(
-      r'^([a-zA-Z_][a-zA-Z0-9_.]*)\.(append|add|remove|discard|clear)\((.*)\)$',
-    ).firstMatch(stmt);
-    if (methodCall != null) {
-      final targetName = _cleanVarName(methodCall.group(1)!);
-      final method = methodCall.group(2)!;
-      final argRaw = methodCall.group(3)!.trim();
-      final container = store[targetName];
-      final argVal = argRaw.isEmpty ? null : evaluate(argRaw);
-      if (container is List) {
-        if (method == 'append') container.add(argVal);
-        if (method == 'remove') container.remove(argVal);
-        if (method == 'clear') container.clear();
-      } else if (container is Set) {
-        if (method == 'add') container.add(argVal);
-        if (method == 'remove' || method == 'discard') container.remove(argVal);
-        if (method == 'clear') container.clear();
+    if (stmt.endsWith(')') && stmt.contains('.')) {
+      final methodCall = RegExp(
+        r'^([a-zA-Z_][a-zA-Z0-9_.]*)\.(append|add|remove|discard|clear)\((.*)\)$',
+      ).firstMatch(stmt);
+      if (methodCall != null) {
+        final targetName = _cleanVarName(methodCall.group(1)!);
+        final method = methodCall.group(2)!;
+        final argRaw = methodCall.group(3)!.trim();
+        final container = store[targetName];
+        final argVal = argRaw.isEmpty ? null : evaluate(argRaw);
+        if (container is List) {
+          if (method == 'append') container.add(argVal);
+          if (method == 'remove') container.remove(argVal);
+          if (method == 'clear') container.clear();
+        } else if (container is Set) {
+          if (method == 'add') container.add(argVal);
+          if (method == 'remove' || method == 'discard') {
+            container.remove(argVal);
+          }
+          if (method == 'clear') container.clear();
+        }
+        return;
       }
-      return;
     }
 
     // Otherwise evaluate expression for side effects
     evaluate(stmt);
+  }
+
+  static List<String>? _splitTopLevelAssignment(String stmt) {
+    int depth = 0;
+    String? quote;
+    bool escaped = false;
+
+    for (int i = 0; i < stmt.length; i++) {
+      final ch = stmt[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch == r'\') {
+        escaped = true;
+        continue;
+      }
+      if (quote != null) {
+        if (stmt.startsWith(quote, i)) {
+          i += quote.length - 1;
+          quote = null;
+        }
+        continue;
+      }
+      if (stmt.startsWith('"""', i) || stmt.startsWith("'''", i)) {
+        quote = stmt.substring(i, i + 3);
+        i += 2;
+        continue;
+      }
+      if (ch == '"' || ch == "'") {
+        quote = ch;
+        continue;
+      }
+      if (ch == '(' || ch == '[' || ch == '{') {
+        depth++;
+        continue;
+      }
+      if (ch == ')' || ch == ']' || ch == '}') {
+        depth--;
+        continue;
+      }
+      if (depth == 0 && i > 0) {
+        for (final compoundOp in const <String>['+=', '-=', '*=', '/=', '|=']) {
+          if (stmt.startsWith(compoundOp, i)) {
+            final lhs = stmt.substring(0, i).trim();
+            final rhs = stmt.substring(i + 2).trim();
+            if (lhs.isNotEmpty && rhs.isNotEmpty) {
+              return <String>[lhs, compoundOp, rhs];
+            }
+          }
+        }
+        if (ch == '=') {
+          final prev = stmt[i - 1];
+          final next = i + 1 < stmt.length ? stmt[i + 1] : '';
+          if (prev != '=' &&
+              prev != '!' &&
+              prev != '<' &&
+              prev != '>' &&
+              next != '=') {
+            final lhs = stmt.substring(0, i).trim();
+            final rhs = stmt.substring(i + 1).trim();
+            if (lhs.isNotEmpty && rhs.isNotEmpty) {
+              return <String>[lhs, '=', rhs];
+            }
+          }
+        }
+      }
+    }
+    return null;
   }
 
   void applyAssignment(String rawName, String op, dynamic rhsVal) {
@@ -324,7 +432,8 @@ class MiniPython {
   }
 
   /// Evaluates a Python expression against [store].
-  dynamic evaluate(String rawExpr) {
+  dynamic evaluate(String rawExpr, [int depth = 0]) {
+    if (depth > 16 || rawExpr.length > 2000) return null;
     var expr = rawExpr.trim();
     if (expr.isEmpty) return null;
 
@@ -346,12 +455,19 @@ class MiniPython {
     final doubleVal = double.tryParse(expr);
     if (doubleVal != null) return doubleVal;
 
+    // Fast path for simple string literals before scanning operators
+    if ((expr.startsWith('"') && expr.endsWith('"')) ||
+        (expr.startsWith("'") && expr.endsWith("'"))) {
+      final directLit = _tryParseStringLiteral(expr);
+      if (directLit != null) return directLit;
+    }
+
     // 2. Ternary expression: `A if COND else B`
     final ternary = _splitTernary(expr);
     if (ternary != null) {
       return evalBool(ternary[1])
-          ? evaluate(ternary[0])
-          : evaluate(ternary[2]);
+          ? evaluate(ternary[0], depth + 1)
+          : evaluate(ternary[2], depth + 1);
     }
 
     // 3. Boolean `or`
@@ -359,7 +475,7 @@ class MiniPython {
     if (orParts.length > 1) {
       dynamic last;
       for (final part in orParts) {
-        last = evaluate(part);
+        last = evaluate(part, depth + 1);
         if (isTruthy(last)) return last;
       }
       return last;
@@ -370,7 +486,7 @@ class MiniPython {
     if (andParts.length > 1) {
       dynamic last;
       for (final part in andParts) {
-        last = evaluate(part);
+        last = evaluate(part, depth + 1);
         if (!isTruthy(last)) return last;
       }
       return last;
@@ -379,22 +495,22 @@ class MiniPython {
     // 5. Unary `not `
     if (expr.startsWith('not ') || expr.startsWith('not(')) {
       final inner = expr.substring(3).trim();
-      return !evalBool(inner);
+      return !isTruthy(evaluate(inner, depth + 1));
     }
 
     // 6. Comparisons: `==`, `!=`, `<=`, `>=`, `<`, `>`, `in`, `not in`, `is`, `is not`
     final cmp = _splitComparison(expr);
     if (cmp != null) {
-      final left = evaluate(cmp.left);
-      final right = evaluate(cmp.right);
+      final left = evaluate(cmp.left, depth + 1);
+      final right = evaluate(cmp.right, depth + 1);
       return _compare(left, cmp.op, right);
     }
 
     // 7. Addition / Subtraction (`+`, `-`) at top level
     final addSub = _splitTopLevelAddSub(expr);
     if (addSub != null) {
-      final left = evaluate(addSub.left);
-      final right = evaluate(addSub.right);
+      final left = evaluate(addSub.left, depth + 1);
+      final right = evaluate(addSub.right, depth + 1);
       if (addSub.op == '+') {
         if (left is num && right is num) return left + right;
         if (left is String || right is String) {
@@ -409,8 +525,8 @@ class MiniPython {
     // 8. Multiplication / Division / Modulo (`*`, `//`, `/`, `%`)
     final mulDiv = _splitTopLevelMulDiv(expr);
     if (mulDiv != null) {
-      final left = evaluate(mulDiv.left);
-      final right = evaluate(mulDiv.right);
+      final left = evaluate(mulDiv.left, depth + 1);
+      final right = evaluate(mulDiv.right, depth + 1);
       if (left is num && right is num) {
         switch (mulDiv.op) {
           case '*':
@@ -433,20 +549,23 @@ class MiniPython {
     if (expr.startsWith('[') && expr.endsWith(']')) {
       final inner = expr.substring(1, expr.length - 1).trim();
       if (inner.isEmpty) return <dynamic>[];
-      return _splitTopLevelArgs(inner).map(evaluate).toList();
+      return _splitTopLevelArgs(inner)
+          .take(64)
+          .map((e) => evaluate(e, depth + 1))
+          .toList();
     }
 
     // 11. Dict literal `{...}`
     if (expr.startsWith('{') && expr.endsWith('}')) {
       final inner = expr.substring(1, expr.length - 1).trim();
       if (inner.isEmpty) return <dynamic, dynamic>{};
-      final items = _splitTopLevelArgs(inner);
+      final items = _splitTopLevelArgs(inner).take(64);
       final map = <dynamic, dynamic>{};
       for (final item in items) {
         final colonIdx = _findTopLevelChar(item, ':');
         if (colonIdx != -1) {
-          final k = evaluate(item.substring(0, colonIdx));
-          final v = evaluate(item.substring(colonIdx + 1));
+          final k = evaluate(item.substring(0, colonIdx), depth + 1);
+          final v = evaluate(item.substring(colonIdx + 1), depth + 1);
           map[k] = v;
         }
       }
@@ -454,26 +573,40 @@ class MiniPython {
     }
 
     // 12. Function / constructor call: `FuncName(args...)`
-    final callMatch =
-        RegExp(r'^([a-zA-Z_][a-zA-Z0-9_.]*)\s*\((.*)\)$', dotAll: true)
-            .firstMatch(expr);
-    if (callMatch != null && _isBalancedCall(expr, callMatch.group(1)!.length)) {
-      final fnName = callMatch.group(1)!.trim();
-      final argsBody = callMatch.group(2)!.trim();
-      return _evalCall(fnName, argsBody);
+    if (expr.endsWith(')')) {
+      final openParen = expr.indexOf('(');
+      if (openParen > 0) {
+        final fnName = expr.substring(0, openParen).trim();
+        if (RegExp(r'^[a-zA-Z_][a-zA-Z0-9_.]*$').hasMatch(fnName) &&
+            _isWrappedByOuterParens(expr.substring(openParen))) {
+          final argsBody =
+              expr.substring(openParen + 1, expr.length - 1).trim();
+          return _evalCall(fnName, argsBody, depth + 1);
+        }
+      }
     }
 
     // 13. Subscript access: `container[key]`
-    final subMatch =
-        RegExp(r'^([a-zA-Z_][a-zA-Z0-9_.]*)\[(.+)\]$').firstMatch(expr);
-    if (subMatch != null) {
-      final target = _lookupVar(subMatch.group(1)!);
-      final key = evaluate(subMatch.group(2)!);
-      if (target is Map) return target[key];
-      if (target is List && key is int && key >= 0 && key < target.length) {
-        return target[key];
+    if (expr.endsWith(']')) {
+      final openBracket = expr.indexOf('[');
+      if (openBracket > 0) {
+        final targetExpr = expr.substring(0, openBracket).trim();
+        if (RegExp(r'^[a-zA-Z_][a-zA-Z0-9_.]*$').hasMatch(targetExpr)) {
+          final target = _lookupVar(targetExpr);
+          final key = evaluate(
+            expr.substring(openBracket + 1, expr.length - 1),
+            depth + 1,
+          );
+          if (target is Map) return target[key];
+          if (target is List &&
+              key is int &&
+              key >= 0 &&
+              key < target.length) {
+            return target[key];
+          }
+          return null;
+        }
       }
-      return null;
     }
 
     // 14. Variable lookup in store
@@ -499,7 +632,7 @@ class MiniPython {
     return null;
   }
 
-  dynamic _evalCall(String fnName, String argsBody) {
+  dynamic _evalCall(String fnName, String argsBody, [int depth = 0]) {
     final posArgs = <dynamic>[];
     final kwArgs = <String, dynamic>{};
 
@@ -508,10 +641,10 @@ class MiniPython {
         final eqIdx = _findKeywordEquals(rawArg);
         if (eqIdx != -1) {
           final k = rawArg.substring(0, eqIdx).trim();
-          final v = evaluate(rawArg.substring(eqIdx + 1));
+          final v = evaluate(rawArg.substring(eqIdx + 1), depth + 1);
           kwArgs[k] = v;
         } else {
-          posArgs.add(evaluate(rawArg));
+          posArgs.add(evaluate(rawArg, depth + 1));
         }
       }
     }

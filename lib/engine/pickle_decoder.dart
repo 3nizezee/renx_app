@@ -18,9 +18,12 @@ class PyObject {
   /// `List` `[slotDict, stateDict]`, or a tuple.
   dynamic state;
 
+  Map<String, dynamic>? _cachedFields;
+
   /// Helper that returns a unified field map regardless of whether the pickle
   /// stored fields in a dict, a `(None, dict)` tuple, or positional args.
   Map<String, dynamic> get fields {
+    if (_cachedFields != null) return _cachedFields!;
     final result = <String, dynamic>{};
     if (state is Map) {
       for (final entry in (state as Map).entries) {
@@ -35,13 +38,14 @@ class PyObject {
         }
       }
     }
+    _cachedFields = result;
     return result;
   }
 
   dynamic operator [](String key) => fields[key];
 
   @override
-  String toString() => 'PyObject($klass, args: $args, state: $state)';
+  String toString() => 'PyObject($klass)';
 }
 
 /// Sentinel placed on the operand stack by the `MARK` opcode.
@@ -80,8 +84,12 @@ class PickleDecoder {
   final Map<int, dynamic> _memo = <int, dynamic>{};
   int _nextMemoId = 0;
 
+  dynamic _pop() => _stack.isNotEmpty ? _stack.removeLast() : null;
+  dynamic get _top => _stack.isNotEmpty ? _stack.last : null;
+
   dynamic decode() {
-    while (_pos < _bytes.length) {
+    final len = _bytes.length;
+    while (_pos < len) {
       final op = _bytes[_pos++];
       if (op == 0x2e) {
         // '.' STOP
@@ -95,11 +103,15 @@ class PickleDecoder {
   void _dispatch(int op) {
     switch (op) {
       case 0x80: // PROTO
-        _pos += 1;
+        if (_pos < _bytes.length) _pos += 1;
         break;
 
       case 0x95: // FRAME (Protocol 4+) - 8 byte frame length, data follows inline
-        _pos += 8;
+        if (_pos + 8 <= _bytes.length) {
+          _pos += 8;
+        } else {
+          _pos = _bytes.length;
+        }
         break;
 
       case 0x28: // '(' MARK
@@ -107,7 +119,7 @@ class PickleDecoder {
         break;
 
       case 0x30: // '0' POP
-        if (_stack.isNotEmpty) _stack.removeLast();
+        _pop();
         break;
 
       case 0x31: // '1' POP_MARK
@@ -142,19 +154,29 @@ class PickleDecoder {
         break;
 
       case 0x4a: // 'J' BININT (signed 32-bit LE)
-        final v = _view.getInt32(_pos, Endian.little);
-        _pos += 4;
-        _stack.add(v);
+        if (_pos + 4 <= _bytes.length) {
+          final v = _view.getInt32(_pos, Endian.little);
+          _pos += 4;
+          _stack.add(v);
+        } else {
+          _pos = _bytes.length;
+          _stack.add(0);
+        }
         break;
 
       case 0x4b: // 'K' BININT1 (unsigned 8-bit)
-        _stack.add(_bytes[_pos++]);
+        _stack.add(_pos < _bytes.length ? _bytes[_pos++] : 0);
         break;
 
       case 0x4d: // 'M' BININT2 (unsigned 16-bit LE)
-        final v = _view.getUint16(_pos, Endian.little);
-        _pos += 2;
-        _stack.add(v);
+        if (_pos + 2 <= _bytes.length) {
+          final v = _view.getUint16(_pos, Endian.little);
+          _pos += 2;
+          _stack.add(v);
+        } else {
+          _pos = _bytes.length;
+          _stack.add(0);
+        }
         break;
 
       case 0x4c: // 'L' LONG (newline-terminated ASCII, possibly trailing 'L')
@@ -166,14 +188,19 @@ class PickleDecoder {
         break;
 
       case 0x8a: // LONG1 (1-byte length, signed little-endian integer)
-        final n = _bytes[_pos++];
+        final n = _pos < _bytes.length ? _bytes[_pos++] : 0;
         _stack.add(_readSignedLeInt(n));
         break;
 
       case 0x8b: // LONG4 (4-byte length, signed little-endian integer)
-        final n = _view.getInt32(_pos, Endian.little);
-        _pos += 4;
-        _stack.add(_readSignedLeInt(n));
+        if (_pos + 4 <= _bytes.length) {
+          final n = _view.getInt32(_pos, Endian.little);
+          _pos += 4;
+          _stack.add(_readSignedLeInt(n));
+        } else {
+          _pos = _bytes.length;
+          _stack.add(0);
+        }
         break;
 
       case 0x46: // 'F' FLOAT (newline-terminated ASCII)
@@ -182,9 +209,14 @@ class PickleDecoder {
         break;
 
       case 0x47: // 'G' BINFLOAT (64-bit big-endian IEEE 754)
-        final v = _view.getFloat64(_pos, Endian.big);
-        _pos += 8;
-        _stack.add(v);
+        if (_pos + 8 <= _bytes.length) {
+          final v = _view.getFloat64(_pos, Endian.big);
+          _pos += 8;
+          _stack.add(v);
+        } else {
+          _pos = _bytes.length;
+          _stack.add(0.0);
+        }
         break;
 
       case 0x53: // 'S' STRING (newline-terminated quoted string)
@@ -193,13 +225,18 @@ class PickleDecoder {
         break;
 
       case 0x54: // 'T' BINSTRING (4-byte length LE)
-        final len = _view.getInt32(_pos, Endian.little);
-        _pos += 4;
-        _stack.add(_readStringBytes(len));
+        if (_pos + 4 <= _bytes.length) {
+          final len = _view.getInt32(_pos, Endian.little);
+          _pos += 4;
+          _stack.add(_readStringBytes(len));
+        } else {
+          _pos = _bytes.length;
+          _stack.add('');
+        }
         break;
 
       case 0x55: // 'U' SHORT_BINSTRING (1-byte length)
-        final len = _bytes[_pos++];
+        final len = _pos < _bytes.length ? _bytes[_pos++] : 0;
         _stack.add(_readStringBytes(len));
         break;
 
@@ -209,13 +246,18 @@ class PickleDecoder {
         break;
 
       case 0x58: // 'X' BINUNICODE (4-byte length LE, UTF-8)
-        final len = _view.getUint32(_pos, Endian.little);
-        _pos += 4;
-        _stack.add(_readUtf8(len));
+        if (_pos + 4 <= _bytes.length) {
+          final len = _view.getUint32(_pos, Endian.little);
+          _pos += 4;
+          _stack.add(_readUtf8(len));
+        } else {
+          _pos = _bytes.length;
+          _stack.add('');
+        }
         break;
 
       case 0x8c: // SHORT_BINUNICODE (1-byte length, UTF-8)
-        final len = _bytes[_pos++];
+        final len = _pos < _bytes.length ? _bytes[_pos++] : 0;
         _stack.add(_readUtf8(len));
         break;
 
@@ -225,13 +267,18 @@ class PickleDecoder {
         break;
 
       case 0x42: // 'B' BINBYTES (4-byte length LE)
-        final len = _view.getUint32(_pos, Endian.little);
-        _pos += 4;
-        _stack.add(_readRawBytes(len));
+        if (_pos + 4 <= _bytes.length) {
+          final len = _view.getUint32(_pos, Endian.little);
+          _pos += 4;
+          _stack.add(_readRawBytes(len));
+        } else {
+          _pos = _bytes.length;
+          _stack.add(Uint8List(0));
+        }
         break;
 
       case 0x43: // 'C' SHORT_BINBYTES (1-byte length)
-        final len = _bytes[_pos++];
+        final len = _pos < _bytes.length ? _bytes[_pos++] : 0;
         _stack.add(_readRawBytes(len));
         break;
 
@@ -250,20 +297,20 @@ class PickleDecoder {
         break;
 
       case 0x85: // TUPLE1
-        final a = _stack.removeLast();
+        final a = _pop();
         _stack.add(<dynamic>[a]);
         break;
 
       case 0x86: // TUPLE2
-        final b = _stack.removeLast();
-        final a = _stack.removeLast();
+        final b = _pop();
+        final a = _pop();
         _stack.add(<dynamic>[a, b]);
         break;
 
       case 0x87: // TUPLE3
-        final c = _stack.removeLast();
-        final b = _stack.removeLast();
-        final a = _stack.removeLast();
+        final c = _pop();
+        final b = _pop();
+        final a = _pop();
         _stack.add(<dynamic>[a, b, c]);
         break;
 
@@ -280,18 +327,22 @@ class PickleDecoder {
         break;
 
       case 0x61: // 'a' APPEND
-        final item = _stack.removeLast();
-        final target = _stack.last;
+        final item = _pop();
+        final target = _top;
         if (target is List) {
           target.add(item);
+        } else if (target is PyObject) {
+          target.args.add(item);
         }
         break;
 
       case 0x65: // 'e' APPENDS
         final items = _popToMark();
-        final target = _stack.last;
+        final target = _top;
         if (target is List) {
           target.addAll(items);
+        } else if (target is PyObject) {
+          target.args.addAll(items);
         }
         break;
 
@@ -309,21 +360,37 @@ class PickleDecoder {
         break;
 
       case 0x73: // 's' SETITEM
-        final val = _stack.removeLast();
-        final key = _stack.removeLast();
-        final target = _stack.last;
+        final val = _pop();
+        final key = _pop();
+        final target = _top;
         if (target is Map) {
           target[key] = val;
+        } else if (target is PyObject) {
+          final m = target.state is Map
+              ? (target.state as Map)
+              : <dynamic, dynamic>{};
+          m[key] = val;
+          target.state = m;
+          target._cachedFields = null;
         }
         break;
 
       case 0x75: // 'u' SETITEMS
         final items = _popToMark();
-        final target = _stack.last;
+        final target = _top;
         if (target is Map) {
           for (int i = 0; i + 1 < items.length; i += 2) {
             target[items[i]] = items[i + 1];
           }
+        } else if (target is PyObject) {
+          final m = target.state is Map
+              ? (target.state as Map)
+              : <dynamic, dynamic>{};
+          for (int i = 0; i + 1 < items.length; i += 2) {
+            m[items[i]] = items[i + 1];
+          }
+          target.state = m;
+          target._cachedFields = null;
         }
         break;
 
@@ -333,7 +400,7 @@ class PickleDecoder {
 
       case 0x90: // ADDITEMS
         final items = _popToMark();
-        final target = _stack.last;
+        final target = _top;
         if (target is Set) {
           target.addAll(items);
         } else if (target is List) {
@@ -353,30 +420,33 @@ class PickleDecoder {
         break;
 
       case 0x93: // STACK_GLOBAL
-        final name = _stack.removeLast()?.toString() ?? '';
-        final module = _stack.removeLast()?.toString() ?? '';
+        final name = _pop()?.toString() ?? '';
+        final module = _pop()?.toString() ?? '';
         _stack.add(PyClassRef(module, name));
         break;
 
       case 0x52: // 'R' REDUCE
-        final args = _stack.removeLast();
-        final callable = _stack.removeLast();
-        _stack.add(_instantiate(callable, args is List ? args : <dynamic>[args]));
+        final args = _pop();
+        final callable = _pop();
+        _stack.add(
+          _instantiate(callable, args is List ? args : <dynamic>[args]),
+        );
         break;
 
       case 0x81: // NEWOBJ
-        final args = _stack.removeLast();
-        final cls = _stack.removeLast();
+        final args = _pop();
+        final cls = _pop();
         _stack.add(_instantiate(cls, args is List ? args : <dynamic>[args]));
         break;
 
       case 0x92: // NEWOBJ_EX
-        final kwargs = _stack.removeLast();
-        final args = _stack.removeLast();
-        final cls = _stack.removeLast();
+        final kwargs = _pop();
+        final args = _pop();
+        final cls = _pop();
         final obj = _instantiate(cls, args is List ? args : <dynamic>[args]);
         if (obj is PyObject && kwargs is Map && kwargs.isNotEmpty) {
           obj.state = kwargs;
+          obj._cachedFields = null;
         }
         _stack.add(obj);
         break;
@@ -400,9 +470,10 @@ class PickleDecoder {
         break;
 
       case 0x62: // 'b' BUILD
-        final state = _stack.removeLast();
-        final target = _stack.last;
+        final state = _pop();
+        final target = _top;
         if (target is PyObject) {
+          target._cachedFields = null;
           if (target.state == null) {
             target.state = state;
           } else if (target.state is Map && state is Map) {
@@ -419,14 +490,19 @@ class PickleDecoder {
         break;
 
       case 0x68: // 'h' BINGET (1-byte memo index)
-        final idx = _bytes[_pos++];
+        final idx = _pos < _bytes.length ? _bytes[_pos++] : 0;
         _stack.add(_memo[idx]);
         break;
 
       case 0x6a: // 'j' LONG_BINGET (4-byte LE memo index)
-        final idx = _view.getUint32(_pos, Endian.little);
-        _pos += 4;
-        _stack.add(_memo[idx]);
+        if (_pos + 4 <= _bytes.length) {
+          final idx = _view.getUint32(_pos, Endian.little);
+          _pos += 4;
+          _stack.add(_memo[idx]);
+        } else {
+          _pos = _bytes.length;
+          _stack.add(null);
+        }
         break;
 
       case 0x70: // 'p' PUT (newline-terminated decimal memo index)
@@ -438,7 +514,7 @@ class PickleDecoder {
         break;
 
       case 0x71: // 'q' BINPUT (1-byte memo index)
-        final idx = _bytes[_pos++];
+        final idx = _pos < _bytes.length ? _bytes[_pos++] : 0;
         if (_stack.isNotEmpty) {
           _memo[idx] = _stack.last;
           if (idx >= _nextMemoId) _nextMemoId = idx + 1;
@@ -446,11 +522,15 @@ class PickleDecoder {
         break;
 
       case 0x72: // 'r' LONG_BINPUT (4-byte LE memo index)
-        final idx = _view.getUint32(_pos, Endian.little);
-        _pos += 4;
-        if (_stack.isNotEmpty) {
-          _memo[idx] = _stack.last;
-          if (idx >= _nextMemoId) _nextMemoId = idx + 1;
+        if (_pos + 4 <= _bytes.length) {
+          final idx = _view.getUint32(_pos, Endian.little);
+          _pos += 4;
+          if (_stack.isNotEmpty) {
+            _memo[idx] = _stack.last;
+            if (idx >= _nextMemoId) _nextMemoId = idx + 1;
+          }
+        } else {
+          _pos = _bytes.length;
         }
         break;
 
@@ -461,17 +541,17 @@ class PickleDecoder {
         break;
 
       case 0x82: // EXT1
-        _pos += 1;
+        if (_pos < _bytes.length) _pos += 1;
         _stack.add(null);
         break;
 
       case 0x83: // EXT2
-        _pos += 2;
+        if (_pos + 2 <= _bytes.length) _pos += 2;
         _stack.add(null);
         break;
 
       case 0x84: // EXT4
-        _pos += 4;
+        if (_pos + 4 <= _bytes.length) _pos += 4;
         _stack.add(null);
         break;
 
@@ -480,7 +560,6 @@ class PickleDecoder {
         break;
 
       case 0x51: // 'Q' BINPERSID
-        // Top of stack is already the persistent ID
         break;
 
       case 0x97: // NEXT_BUFFER (Protocol 5)
@@ -488,27 +567,29 @@ class PickleDecoder {
         break;
 
       default:
-        throw FormatException(
-          'Unsupported pickle opcode 0x${op.toRadixString(16)} at offset ${_pos - 1}',
-        );
+        // Unknown opcode: stop decoding cleanly rather than crashing
+        _pos = _bytes.length;
+        break;
     }
   }
 
   dynamic _instantiate(dynamic callable, List<dynamic> args) {
     if (callable is PyClassRef) {
       final full = callable.fullName;
-      // Unwrap standard Python 2/3 reconstruction helpers
-      if (full == '__builtin__.set' || full == 'builtins.set') {
+      if (full == '__builtin__.set' ||
+          full == 'builtins.set' ||
+          full == '__builtin__.frozenset' ||
+          full == 'builtins.frozenset' ||
+          full.endsWith('RevertableSet')) {
         if (args.isNotEmpty && args.first is Iterable) {
           return (args.first as Iterable).toSet();
         }
         return <dynamic>{};
       }
-      if (full == '__builtin__.frozenset' || full == 'builtins.frozenset') {
-        if (args.isNotEmpty && args.first is Iterable) {
-          return (args.first as Iterable).toSet();
-        }
-        return <dynamic>{};
+      if (full == '__builtin__.unicode' ||
+          full == '__builtin__.str' ||
+          full == 'builtins.str') {
+        return args.isNotEmpty ? (args.first?.toString() ?? '') : '';
       }
       if (full == '_codecs.encode' || full == 'codecs.encode') {
         if (args.isNotEmpty) {
@@ -520,16 +601,29 @@ class PickleDecoder {
           full == 'copyreg._reconstructor') {
         if (args.isNotEmpty) {
           final innerCls = args.first;
-          final innerArgs = args.length > 1 ? args.sublist(1) : <dynamic>[];
+          // In Python 2/3, _reconstructor(cls, base, state) passes the base
+          // class at args[1] and the primitive value (e.g. string for PyExpr)
+          // at args[2]. Strip `base` if it is a PyClassRef so `innerArgs.first`
+          // is the actual primitive value.
+          List<dynamic> innerArgs;
+          if (args.length >= 3 && args[1] is PyClassRef) {
+            innerArgs = args.sublist(2);
+          } else if (args.length == 2 &&
+              args[1] is PyClassRef &&
+              (args[1] as PyClassRef).name == 'object') {
+            innerArgs = <dynamic>[];
+          } else {
+            innerArgs = args.length > 1 ? args.sublist(1) : <dynamic>[];
+          }
           return _instantiate(innerCls, innerArgs);
         }
       }
       if (full == '__builtin__.object' || full == 'builtins.object') {
         return PyObject('object', args: args);
       }
-      // OrderedDict / defaultdict / revertable collections in Ren'Py
       if (full.endsWith('RevertableDict') ||
-          full == 'collections.OrderedDict') {
+          full == 'collections.OrderedDict' ||
+          full == 'collections.defaultdict') {
         final map = <dynamic, dynamic>{};
         if (args.isNotEmpty && args.first is List) {
           for (final pair in args.first as List) {
@@ -546,14 +640,6 @@ class PickleDecoder {
         }
         return <dynamic>[];
       }
-      if (full.endsWith('RevertableSet')) {
-        if (args.isNotEmpty && args.first is Iterable) {
-          return (args.first as Iterable).toSet();
-        }
-        return <dynamic>{};
-      }
-      // For `renpy.ast.PyExpr` and `renpy.ast.PyCode`, preserve both the
-      // expression string and line/filename metadata on PyObject.
       return PyObject(full, args: args);
     }
     if (callable is PyObject) {
@@ -576,39 +662,50 @@ class PickleDecoder {
 
   String _readLine() {
     final start = _pos;
-    while (_pos < _bytes.length && _bytes[_pos] != 0x0a) {
+    final len = _bytes.length;
+    while (_pos < len && _bytes[_pos] != 0x0a) {
       _pos++;
     }
-    final lineBytes = _bytes.sublist(start, _pos);
-    if (_pos < _bytes.length && _bytes[_pos] == 0x0a) {
+    final end = _pos;
+    if (_pos < len && _bytes[_pos] == 0x0a) {
       _pos++;
     }
-    if (lineBytes.isNotEmpty && lineBytes.last == 0x0d) {
-      return latin1.decode(lineBytes.sublist(0, lineBytes.length - 1));
-    }
-    return latin1.decode(lineBytes);
+    final trimmedEnd =
+        (end > start && _bytes[end - 1] == 0x0d) ? end - 1 : end;
+    return latin1.decode(Uint8List.sublistView(_bytes, start, trimmedEnd));
   }
 
   String _readUtf8(int len) {
+    if (len <= 0) return '';
     final end = (_pos + len).clamp(0, _bytes.length);
-    final slice = _bytes.sublist(_pos, end);
+    final slice = Uint8List.sublistView(_bytes, _pos, end);
     _pos = end;
     return utf8.decode(slice, allowMalformed: true);
   }
 
+  /// Fast non-throwing decoder for Python 2 `BINSTRING` / `SHORT_BINSTRING`.
+  /// Avoids throwing `FormatException` on binary bytecode blobs.
   String _readStringBytes(int len) {
+    if (len <= 0) return '';
     final end = (_pos + len).clamp(0, _bytes.length);
-    final slice = _bytes.sublist(_pos, end);
+    final slice = Uint8List.sublistView(_bytes, _pos, end);
     _pos = end;
-    // Python 2 strings inside Ren'Py 7 pickles may be UTF-8 text or raw bytes.
-    try {
-      return utf8.decode(slice);
-    } catch (_) {
+
+    bool hasHighBytes = false;
+    for (int i = 0; i < slice.length; i++) {
+      if (slice[i] >= 0x80) {
+        hasHighBytes = true;
+        break;
+      }
+    }
+    if (!hasHighBytes) {
       return latin1.decode(slice);
     }
+    return utf8.decode(slice, allowMalformed: true);
   }
 
   Uint8List _readRawBytes(int len) {
+    if (len <= 0) return Uint8List(0);
     final end = (_pos + len).clamp(0, _bytes.length);
     final slice = Uint8List.sublistView(_bytes, _pos, end);
     _pos = end;
@@ -616,6 +713,10 @@ class PickleDecoder {
   }
 
   int _readUint64Le() {
+    if (_pos + 8 > _bytes.length) {
+      _pos = _bytes.length;
+      return 0;
+    }
     final lo = _view.getUint32(_pos, Endian.little);
     final hi = _view.getUint32(_pos + 4, Endian.little);
     _pos += 8;
@@ -623,15 +724,27 @@ class PickleDecoder {
   }
 
   int _readSignedLeInt(int byteCount) {
-    if (byteCount <= 0) return 0;
+    if (byteCount <= 0 || _pos >= _bytes.length) return 0;
     final end = (_pos + byteCount).clamp(0, _bytes.length);
-    final slice = _bytes.sublist(_pos, end);
+    final slice = Uint8List.sublistView(_bytes, _pos, end);
     _pos = end;
+    if (slice.isEmpty) return 0;
+
+    if (slice.length <= 6) {
+      int result = 0;
+      for (int i = slice.length - 1; i >= 0; i--) {
+        result = (result << 8) | slice[i];
+      }
+      if ((slice.last & 0x80) != 0) {
+        result -= 1 << (slice.length * 8);
+      }
+      return result;
+    }
+
     BigInt result = BigInt.zero;
     for (int i = slice.length - 1; i >= 0; i--) {
       result = (result << 8) | BigInt.from(slice[i]);
     }
-    // Sign extend if highest bit is set
     if ((slice.last & 0x80) != 0) {
       result -= BigInt.one << (slice.length * 8);
     }
@@ -640,10 +753,13 @@ class PickleDecoder {
 
   String _unescapeQuotedString(String raw) {
     var s = raw;
-    if ((s.startsWith("'") && s.endsWith("'")) ||
-        (s.startsWith('"') && s.endsWith('"')) && s.length >= 2) {
+    if (s.length >= 2 &&
+        ((s.startsWith("'") && s.endsWith("'")) ||
+            (s.startsWith('"') && s.endsWith('"')))) {
       s = s.substring(1, s.length - 1);
     }
+    if (!s.contains(r'\')) return s;
+
     final sb = StringBuffer();
     for (int i = 0; i < s.length; i++) {
       final ch = s[i];

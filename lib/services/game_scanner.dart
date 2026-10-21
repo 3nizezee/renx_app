@@ -99,12 +99,6 @@ class GameScanner {
       if (!py.store.containsKey('config.name')) {
         await _evaluateOptionsFile(fs, py, 'options.rpy', isRpyc: false);
       }
-      if (!py.store.containsKey('config.name')) {
-        await _evaluateOptionsFile(fs, py, 'script.rpyc', isRpyc: true);
-      }
-      if (!py.store.containsKey('config.name')) {
-        await _evaluateOptionsFile(fs, py, 'script.rpy', isRpyc: false);
-      }
 
       String? configuredTitle;
       final rawConfigName =
@@ -211,7 +205,7 @@ class GameScanner {
     required bool isRpyc,
   }) async {
     final bytes = await fs.readBytes(virtualPath);
-    if (bytes == null) return;
+    if (bytes == null || bytes.length > 512 * 1024) return;
 
     ScriptFile? file;
     try {
