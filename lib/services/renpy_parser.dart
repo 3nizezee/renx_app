@@ -279,11 +279,11 @@ class RenpyScriptParser {
           final compressed = bytes.sublist(start, start + length);
           final decompressed = zlib.decode(compressed);
           final textContent =
-              utf8.decode(decompressed, allowInvalid: true);
+              utf8.decode(decompressed, allowMalformed: true);
 
           // Match human-readable dialogue sentences (at least 10 chars, containing spaces or Thai/CJK/punctuation)
           final stringMatches = RegExp(
-            r'([A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FAF][A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FAF\s,\.\!\?\-\—\'\"]{12,180})',
+            r'''([A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FAF][A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FAF\s,\.\!\?\-]{12,180})''',
           ).allMatches(textContent);
 
           for (final m in stringMatches) {
