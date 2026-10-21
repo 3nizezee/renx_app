@@ -1,5 +1,5 @@
 name: ax_app
-description: "A modern Flutter application with automated Cloud APK build."
+description: "A modern Ren'Py Game Launcher and Runner for Android, similar to JoiPlay."
 publish_to: "none"
 version: 1.0.0+1
 
@@ -10,6 +10,12 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
+  shared_preferences: ^2.3.2
+  file_picker: ^8.1.4
+  path_provider: ^2.1.4
+  path: ^1.9.0
+  permission_handler: ^11.3.1
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:
